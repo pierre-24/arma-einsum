@@ -1,4 +1,4 @@
-# `arma_einsum`
+# `arma-einsum`
 
 A (not clever) implementation of [`einsum()`](https://numpy.org/doc/stable/reference/generated/numpy.einsum.html) in C++ using Armadillo.
 
