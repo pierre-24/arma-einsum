@@ -1,0 +1,86 @@
+name: CI
+
+env:
+  BUILD_DIR: _build
+  LLVM_VERSION: 19
+  NTHREADS: 2
+  NPROCS: 2
+  PKGS: meson ninja-build valgrind
+  PKGS_OPENBLAS: libopenblas-openmp-dev liblapack-dev
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ dev ]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        la_backend: [openblas]
+    env:
+      CC: ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }}
+      CXX: ${{ matrix.compiler == 'clang' && 'clang++' || 'g++' }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up GCC
+        if: ${{ matrix.compiler == 'gcc' }}
+        uses: egor-tensin/setup-gcc@v1
+        with:
+          version: latest
+      - name: Set up clang
+        if: ${{ matrix.compiler == 'clang' }}
+        uses: ZhongRuoyu/setup-llvm@v0
+        with:
+          llvm-version: ${{ env.LLVM_VERSION }}
+      - name: Install build dependencies
+        run: |
+          sudo apt-get install ${{ env.PKGS }}
+      - name: Install BLAS
+        if: ${{ matrix.la_backend == 'openblas' }}
+        run: |
+          sudo apt-get install ${{ env.PKGS_OPENBLAS }} 
+          meson setup ${{ env.BUILD_DIR }} --buildtype=debug
+      - name: Compile (with Meson)
+        run: >-
+          meson compile
+          -C ${{ env.BUILD_DIR }}
+      - name: Run unit tests (with Meson) and OMP_NUM_THREADS != 1
+        run: >-
+          OMP_NUM_THREADS=${{ env.NTHREADS }}
+          MESON_NUM_PROCESSES=1
+          MESON_TESTTHREADS=1
+          meson test
+          --print-errorlogs
+          -C ${{ env.BUILD_DIR }}
+      - name: Memcheck (with Meson & Valgdrind & OMP_NUM_THREADS = 1)
+        if: ${{ matrix.compiler == 'gcc' }}
+        run: >-
+          OMP_NUM_THREADS=1 
+          MESON_NUM_PROCESSES=${{ env.NTHREADS }}
+          MESON_TESTTHREADS=${{ env.NTHREADS }}
+          meson test
+          --print-errorlogs
+          --timeout-multiplier 0
+          --wrap='valgrind --leak-check=full --error-exitcode=1'
+          -C ${{ env.BUILD_DIR }}
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.12'
+      - name: Install cpplint
+        run: |
+          pip install cpplint
+      - name: lint
+        run: |
+          make lint

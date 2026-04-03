@@ -1,0 +1,29 @@
+option(
+    'use_lapack',
+    type: 'boolean',
+    value: false,
+)
+
+option(
+    'use_blas',
+    type: 'boolean',
+    value: false,
+)
+
+option(
+    'use_atlas',
+    type: 'boolean',
+    value: false,
+)
+
+option(
+    'use_arpack',
+    type: 'boolean',
+    value: false,
+)
+
+option(
+    'use_superlu',
+    type: 'boolean',
+    value: false,
+)

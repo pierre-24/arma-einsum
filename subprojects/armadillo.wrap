@@ -1,0 +1,9 @@
+[wrap-git]
+url = https://gitlab.com/conradsnicta/armadillo-code.git
+revision = 14.6.x
+depth = 1
+
+patch_directory = armadillo
+
+[provide]
+armadillo = armadillo_dep
