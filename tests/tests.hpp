@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#define TEST_FLOAT double
+
 class AETestsSuite : public testing::Test {
  public:
   AETestsSuite() = default;
