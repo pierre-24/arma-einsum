@@ -1,0 +1,20 @@
+option(
+    'la_packages',
+    type: 'array',
+    value: ['blas', 'lapack'],
+    description : 'linear algebra backend packages to load'
+)
+
+option(
+    'la_libraries',
+    type: 'array',
+    value: [],
+    description : 'libraries to load'
+)
+
+option(
+    'tests',
+    type: 'boolean',
+    value: true,
+    description: 'Include tests',
+)

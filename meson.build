@@ -1,6 +1,6 @@
 project(
     'mcpp_heisenberg', 'cpp',
-    version : '0.2.0',
+    version : '0.0.1',
     default_options : ['warning_level=3', 'cpp_std=c++20']
 )
 
@@ -46,4 +46,6 @@ arma_einsum_dep = declare_dependency(
     dependencies: lib_deps
 )
 
-subdir('tests')
+if get_option('tests')
+    subdir('tests')
+endif
