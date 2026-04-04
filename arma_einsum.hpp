@@ -192,9 +192,6 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
       std::format("number of operands ({}) do not match definition ({})", num_operands, _eq.size() - 1));
   }
 
-  // get a tuple
-  auto pack_tuple = std::forward_as_tuple(operands...);
-
   // specify and check the type of each array in operands
   multival_t indices_size;
 
