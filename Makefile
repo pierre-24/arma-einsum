@@ -1,4 +1,4 @@
-DIRS = . tests/
+DIRS = arma_einsum.hpp tests/
 
 lint:
 	 cpplint --quiet --recursive $(DIRS)

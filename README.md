@@ -27,6 +27,8 @@ Just copy [`arma_einsum.hpp`](arma_einsum.hpp) into your project and make sure A
 
 That’s it: no build system changes or additional dependencies required.
 
+If you want to use a Meson wrap file instead, check [the example](example-meson).
+
 ## Usage
 
 ```cpp
@@ -82,3 +84,36 @@ Assume:
 | `("ij->", A)`         | Sum of all elements           |
 | `("ij,j", A, a)`      | Matrix-vector multiplication  |
 | `("ik,kj", A, B)`     | Matrix-matrix multiplication  |
+
+
+## Development
+
+[Issues](https://github.com/pierre-24/arma-einsum/issues) and [pull requests](https://github.com/pierre-24/arma-einsum/pull/) are welcomed :)
+
+To help, you can start by [forking the repository](https://github.com/pierre-24/arma-einsum/fork), and then
+
+```bash
+git clone git@github.com:YOUR_USERNAME/arma-einsum.git
+cd arma-einsum
+```
+
+It is recommended to use the [Meson](https://mesonbuild.com/) build system:
+
+```bash
+# setup
+meson setup _build
+
+# compile
+meson compile -C _build
+
+# run test suites
+meson test -C _build
+```
+
+You can also check linting via [`cpplint`](https://github.com/cpplint/cpplint) using:
+
+```bash
+pip install cpplint  # optional: use virtualenv
+
+make lint
+```
