@@ -16,7 +16,7 @@
 namespace armaeinsum {
 
 template <typename T>
-concept ArmadilloType = arma::is_arma_type<T>::value;
+concept ArmadilloType = arma::is_arma_type<T>::value ||  arma::is_arma_cube_type<T>::value;
 
 class ParserError: public std::runtime_error {
  public:
@@ -118,27 +118,6 @@ class Equation {
     if (indices.size() < 2) {
       throw EvaluationError("not enough operands");
     }
-
-    // check if there are enough pair of indices
-    indices_t nri;
-    for (auto& operand : _eq) {
-      for (const auto& c : operand) {
-        if (auto position = std::find(nri.begin(), nri.end(), c); position != nri.end()) {
-          nri.erase(position);
-        } else {
-          nri.push_back(c);
-        }
-      }
-    }
-
-    if (!nri.empty()) {
-      std::stringstream ss;
-      for (const auto& c : nri) {
-        ss << c << " ";
-      }
-
-      throw EvaluationError(std::format("non-paired indices: {}", ss.str()));
-    }
   }
 
   [[nodiscard]] uint64_t n() const { return _eq.size(); }
@@ -178,129 +157,112 @@ class Equation {
 
 template <typename T, ArmadilloType... Types>
 arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
-  // check if result is a matrix
-  auto& result_indices = _eq[_eq.size() - 1];
-
+  // 1. Basic validation of result dimensionality
+  const auto& result_indices = _eq.back();
   if (result_indices.size() > 2) {
-    throw EvaluationError("use evaluate_cube() for result.n() > 2");
+    throw EvaluationError("Result rank > 2; use evaluate_cube() instead.");
   }
 
-  // check size of operands
-  size_t num_operands = sizeof...(operands);
-  if (num_operands != _eq.size() - 1) {
-    throw EvaluationError(
-      std::format("number of operands ({}) do not match definition ({})", num_operands, _eq.size() - 1));
+  // 2. Validate operand count
+  if (sizeof...(Types) != _eq.size() - 1) {
+    throw EvaluationError(std::format("Expected {} operands, got {}", _eq.size() - 1, sizeof...(Types)));
   }
 
-  // specify and check the type of each array in operands
   multival_t indices_size;
 
-  auto define_and_check = [&]<typename T0>(uint64_t& iop_, const T0 & op) {
-    std::vector<uint64_t> op_dims;
-    if (arma::is_Col<std::decay_t<T0>>::value) {
-      op_dims.push_back(op.n_rows);
-    } else if (arma::is_Row<std::decay_t<T0>>::value) {
-      op_dims.push_back(op.n_rows);
-    }  else {  // assume a matrix (and hope for the best)
-      op_dims.push_back(op.n_rows);
-      op_dims.push_back(op.n_cols);
-    }
+  // 3. Define and check sizes
+  auto check_and_map = [&]<std::size_t... I>(std::index_sequence<I...>) {
+    auto validate = [&]<typename T0>(auto idx, const T0& op) {
+      using OpType = std::decay_t<T0>;
+      const auto& op_labels = _eq[idx];
 
-    const auto& op_indices = _eq.at(iop_);
-
-    if (op_dims.size() != op_indices.size()) {
-      throw EvaluationError(
-        std::format("operand size ({}) and actual operand size ({}) mismatch for operand #{}",
-          op_dims.size(), op_indices.size(), iop_));
-    }
-
-    for (uint64_t i = 0; i < op_dims.size(); i++) {
-      char index = op_indices.at(i);
-      if (indices_size.contains(index)) {
-        if (indices_size[index] != op_dims.at(i)) {
-          throw EvaluationError(
-            std::format("size mismatch for operand `{}` ({}!={})",
-              index, indices_size[index], op_dims.at(i)));
-        }
+      // Determine rank at compile-time to avoid "no member" errors
+      size_t actual_rank = 0;
+      if constexpr (arma::is_arma_cube_type<OpType>::value) {
+        actual_rank = 3;
+      } else if constexpr (arma::is_Col<OpType>::value || arma::is_Row<OpType>::value) {
+        actual_rank = 1;
       } else {
-        indices_size[index] = op_dims.at(i);
+        actual_rank = 2;  // Standard Mat
       }
-    }
 
-    iop_++;
-  };  // NOLINT
-
-  uint64_t iop = 0;
-  (define_and_check(iop, operands), ...);
-
-  // set result size & evaluate
-  arma::Mat<T> result(1, 1);
-
-  auto evaluate_mat = [&]<typename T0>(uint64_t& iop_, T& val, const multival_t& v_, const T0& op) {
-    const auto& op_indices = _eq.at(iop_);
-
-    if (arma::is_Col<std::decay_t<T0>>::value) {
-      val *= op.at(v_.at(op_indices.at(0)));
-    } else if (arma::is_Row<std::decay_t<T0>>::value) {
-      val *= op.at(v_.at(op_indices.at(0)));
-    }  else {  // assume a matrix (and hope for the best)
-      val *= op.at(v_.at(op_indices.at(0)), v_.at(op_indices.at(1)));
-    }
-
-    iop_++;
-  };  // NOLINT
-
-  if (result_indices.empty()) {
-    IndicesIterator it(indices_size);
-    while (it.has_next()) {
-      auto val = *it;
-      T tmp = 1;
-      iop = 0;
-      (evaluate_mat(iop, tmp, val, operands), ...);
-      result.at(0, 0) += tmp;
-      it.next();
-    }
-  } else if (result_indices.size() == 1) {
-    char index0 = result_indices.at(0);
-    if (!indices_size.contains(index0)) {
-      throw EvaluationError(std::format("unknown index `{}` for result", index0));
-    }
-    result.resize(indices_size.at(index0));
-
-    for (uint64_t irow = 0; irow < indices_size.at(index0); irow++) {
-      IndicesIterator it(indices_size, {{index0, irow}});
-      while (it.has_next()) {
-        auto val = *it;
-        T tmp = 1;
-        iop = 0;
-        (evaluate_mat(iop, tmp, val, operands), ...);
-        result.at(irow) += tmp;
-        it.next();
+      if (op_labels.size() != actual_rank) {
+        throw EvaluationError(std::format("Rank mismatch for operand #{}", idx));
       }
-    }
-  } else if (result_indices.size() == 2) {
-    char index0 = result_indices.at(0), index1 = result_indices.at(1);
-    if (!indices_size.contains(index0)) {
-      throw EvaluationError(std::format("unknown index `{}` for result", index0));
-    }
-    if (!indices_size.contains(index1)) {
-      throw EvaluationError(std::format("unknown index `{}` for result", index1));
-    }
-    result.resize(indices_size.at(index0), indices_size.at(index1));
 
-    for (uint64_t irow = 0; irow < indices_size.at(index0); irow++) {
-      for (uint64_t icol = 0; icol < indices_size.at(index1); icol++) {
-        IndicesIterator it(indices_size, {{index0, irow}, {index1, icol}});
-        while (it.has_next()) {
-          auto val = *it;
-          T tmp = 1;
-          iop = 0;
-          (evaluate_mat(iop, tmp, val, operands), ...);
-          result.at(irow, icol) += tmp;
-          it.next();
+      // Map index labels to actual Armadillo dimensions
+      for (size_t d = 0; d < actual_rank; ++d) {
+        char label = op_labels[d];
+        uint64_t d_size = 0;
+
+        if (d == 0) {
+          d_size = op.n_rows;
+        } else if (d == 1) {
+          d_size = op.n_cols;
+        } else if constexpr (arma::is_arma_cube_type<OpType>::value) {
+          d_size = op.n_slices;
+        }
+
+        if (indices_size.contains(label)) {
+          if (indices_size[label] != d_size) {
+            throw EvaluationError(std::format("Size mismatch for index '{}'", label));
+          }
+        } else {
+          indices_size[label] = d_size;
         }
       }
+    };  // NOLINT
+    (validate(I, operands), ...);
+  };  // NOLINT
+
+  check_and_map(std::make_index_sequence<sizeof...(Types)>{});
+
+  // 4. Initialize result matrix
+  arma::Mat<T> result;
+  if (result_indices.empty()) {
+    result.set_size(1, 1);
+  } else if (result_indices.size() == 1) {
+    result.set_size(indices_size.at(result_indices[0]), 1);
+  } else {
+    result.set_size(indices_size.at(result_indices[0]), indices_size.at(result_indices[1]));
+  }
+  result.zeros();  // Critical: ensure memory is zeroed for accumulation
+
+  // 5. Evaluation Loop
+  IndicesIterator it(indices_size);
+  while (it.has_next()) {
+    const auto& v = *it;
+    T product = 1;
+
+    // Perform multiplication across all operands
+    auto multiply_operands = [&]<std::size_t... I>(std::index_sequence<I...>) {
+      (
+          [&](auto idx, const auto& op) {
+            using OpType = std::decay_t<decltype(op)>;
+            const auto& labels = _eq[idx];
+
+            if constexpr (arma::is_arma_cube_type<OpType>::value) {
+              product *= op.at(v.at(labels[0]), v.at(labels[1]), v.at(labels[2]));
+            } else if constexpr (arma::is_Col<OpType>::value || arma::is_Row<OpType>::value) {
+              product *= op.at(v.at(labels[0]));
+            } else {
+              product *= op.at(v.at(labels[0]), v.at(labels[1]));
+            }
+          }(I, operands), ...);
+    };  // NOLINT
+
+    multiply_operands(std::make_index_sequence<sizeof...(Types)>{});
+
+    // Accumulate into the correct cell of the result
+    if (result_indices.empty()) {
+      result.at(0, 0) += product;
+    } else if (result_indices.size() == 1) {
+      result.at(v.at(result_indices[0])) += product;
+    } else {
+      result.at(v.at(result_indices[0]), v.at(result_indices[1])) += product;
     }
+
+    it.next();
   }
 
   return result;

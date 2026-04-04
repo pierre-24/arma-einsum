@@ -35,6 +35,15 @@ TEST_F(ParserTests, trace) {
     1e-5);
 }
 
+TEST_F(ParserTests, sum) {
+  auto A = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
+
+  EXPECT_NEAR(
+    armaeinsum::einsum_mat<TEST_FLOAT>("ij->", A).at(0, 0),
+    arma::accu(A),
+    1e-5);
+}
+
 TEST_F(ParserTests, transpose) {
   auto A = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
 
@@ -83,4 +92,23 @@ TEST_F(ParserTests, unitary_transformation) {
     armaeinsum::einsum_mat<TEST_FLOAT>("ji,jk,kl->il", R, B, R),
     R.t() * B * R,
     "abstol", 1e-5));
+}
+
+TEST_F(ParserTests, traces_with_cube) {
+  auto A = arma::randn<arma::Cube<TEST_FLOAT>>(5, 5, 2);
+
+  EXPECT_NEAR(
+    armaeinsum::einsum_mat<TEST_FLOAT>("iij", A).at(0),
+    arma::trace(A.slice(0)),
+    1e-5);
+}
+
+TEST_F(ParserTests, xsum_with_cubes) {
+  auto A = arma::randn<arma::Cube<TEST_FLOAT>>(5, 5, 2);
+  auto B = arma::randn<arma::Cube<TEST_FLOAT>>(5, 5, 2);
+
+  EXPECT_NEAR(
+    armaeinsum::einsum_mat<TEST_FLOAT>("jki,jkl", A, B).at(0, 0),
+    armaeinsum::einsum_mat<TEST_FLOAT>("jk,jk", A.slice(0), B.slice(0)).at(0, 0),
+    1e-5);
 }
