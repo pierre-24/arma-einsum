@@ -6,7 +6,7 @@ It enables expressive tensor-style operations (dot products, traces, contraction
 
 ## Notes & Limitations
 
-- Requires C++20.
+- Requires C++20 and the support of [`std::format`](https://github.com/paulkazusek/std_format_cheatsheet/blob/main/README.md#requirement) (i.e., GCC >= 13.1 or clang >= 14)
 - Supports OMP.
 - Due to the use of Armadillo, only supports outputs up to **rank-2 (matrices)**.
 - No support for:
