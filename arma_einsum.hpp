@@ -19,12 +19,10 @@ template <typename T>
 concept ArmadilloType = arma::is_arma_type<T>::value;
 
 class ParserError: public std::runtime_error {
- private:
-  uint64_t _position;
  public:
   ParserError() = delete;
   explicit ParserError(uint64_t position, const std::string& msg) :
-    runtime_error(std::format("error at position {}: {}", position, msg)), _position(position) {}
+    runtime_error(std::format("error at position {}: {}", position, msg)) {}
 };
 
 class EvaluationError: public std::runtime_error {
@@ -33,75 +31,66 @@ class EvaluationError: public std::runtime_error {
   explicit EvaluationError(const std::string& msg) : runtime_error(msg) {}
 };
 
-/**
- * Expression node
- */
-class ExprNode {
- public:
-  ExprNode() = default;
-  virtual ~ExprNode() = default;
-
-  /// string representation
-  virtual explicit operator std::string() const = 0;
-};
+using indices_t = std::vector<char>;
 
 /**
- * Indices node
+ * Equation
  *
- * INDICES := [a-zA-Z]{0,3}
  */
-class Indices : public ExprNode {
+class Equation {
  private:
-  std::vector<char> _indices;
- public:
-  Indices() = default;
-
-  explicit Indices(const std::vector<char>& indices) : ExprNode(), _indices(indices) {}
-
-  const std::vector<char>& indices() { return _indices; }
-
-  uint64_t n() const { return _indices.size(); }
-
-  explicit operator std::string() const override {
-    std::string result;
-    result.resize(_indices.size());
-    std::copy(_indices.begin(), _indices.end(), result.begin());
-
-    return result;
-  }
-};
-
-/**
- * Equation node
- *
- * EQ := INDICES (',' INDICES)* ('->' INDICES)?
- *
- */
-class Equation: public ExprNode {
- private:
-  std::vector<Indices> _operands;
-  Indices _result;
+  std::vector<indices_t> _eq;
 
  public:
   Equation();
 
-  Equation(const std::vector<Indices>& operands, Indices result):
-    ExprNode(), _operands(operands), _result(std::move(result)) {}
+  explicit Equation(const std::vector<indices_t>& indices): _eq(indices) {
+    if (indices.size() < 2) {
+      throw EvaluationError("not enough operands");
+    }
 
-  uint64_t n() const { return _operands.size(); }
+    // check if there are enough pair of indices
+    indices_t nri;
+    for (auto& operand : _eq) {
+      for (const auto& c : operand) {
+        if (auto position = std::find(nri.begin(), nri.end(), c); position != nri.end()) {
+          nri.erase(position);
+        } else {
+          nri.push_back(c);
+        }
+      }
+    }
 
-  explicit operator std::string() const override {
+    if (!nri.empty()) {
+      std::stringstream ss;
+      for (const auto& c : nri) {
+        ss << c << " ";
+      }
+
+      throw EvaluationError(std::format("non-paired indices: {}", ss.str()));
+    }
+  }
+
+  [[nodiscard]] uint64_t n() const { return _eq.size(); }
+
+  explicit operator std::string() const {
     std::stringstream ss;
 
-    for (uint64_t i = 0; i < _operands.size(); i++) {
+    for (uint64_t i = 0; i < _eq.size() - 1; i++) {
       if (i > 0) {
         ss << ",";
       }
 
-      ss << std::string(_operands.at(i));
+      for (auto& c : _eq[i]) {
+        ss << c;
+      }
     }
 
-    ss << "->" << std::string(_result);
+    ss << "->";
+
+    for (auto& c : _eq[_eq.size() - 1]) {
+      ss << c;
+    }
 
     return ss.str();
   }
@@ -117,44 +106,20 @@ class Equation: public ExprNode {
   template <typename T, ArmadilloType... Types> arma::Mat<T> evaluate_mat(const Types&... operands);
 };
 
-inline Indices _parse_indices(const std::string& input, uint64_t& position) {
-  if (position >= input.length()) {
-    throw ParserError(position, "expected indices, got EOS");
-  }
-
-  if (!isalpha(input[position])) {
-    throw ParserError(position, "expected a letter for indices");
-  }
-
-  std::vector<char> indices;
-  while (position < input.length() && isalpha(input[position])) {
-    indices.push_back(input[position]);
-    position++;
-  }
-
-  if (indices.empty()) {
-    throw ParserError(position, "expected at least one index");
-  }
-
-  if (indices.size() > 3) {
-    throw ParserError(position, std::format("too many indices ({}), armadillo only can go up to 3", indices.size()));
-  }
-
-  return Indices(indices);
-}
-
 template <typename T, ArmadilloType... Types>
 arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   // check if result is a matrix
-  if (_result.n() > 2) {
+  auto& result_indices = _eq[_eq.size() - 1];
+
+  if (result_indices.size() > 2) {
     throw EvaluationError("use evaluate_cube() for result.n() > 2");
   }
 
   // check size of operands
   size_t num_operands = sizeof...(operands);
-  if (num_operands != _operands.size()) {
+  if (num_operands != _eq.size() - 1) {
     throw EvaluationError(
-      std::format("number of operands ({}) do not match definition ({})", num_operands, _operands.size()));
+      std::format("number of operands ({}) do not match definition ({})", num_operands, _eq.size() - 1));
   }
 
   // get a tuple
@@ -175,7 +140,7 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
       op_dims.push_back(op.n_cols);
     }
 
-    const auto& op_indices = _operands.at(iop).indices();
+    const auto& op_indices = _eq.at(iop);
 
     if (op_dims.size() != op_indices.size()) {
       throw EvaluationError(
@@ -204,9 +169,9 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   // set result size & evaluate
   arma::Mat<T> result(1, 1);
 
-  if (_result.n() == 0) {
-  } else if (_result.n() == 1) {
-    char index0 = _result.indices().at(0);
+  if (result_indices.empty()) {
+  } else if (result_indices.size() == 1) {
+    char index0 = result_indices.at(0);
     if (!indices_size.contains(index0)) {
       throw EvaluationError(std::format("unknown index `{}` for result", index0));
     }
@@ -217,8 +182,8 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
       result.at(irow) = 0;
     }
 
-  } else if (_result.n() == 2) {
-    char index0 = _result.indices().at(0), index1 = _result.indices().at(1);
+  } else if (result_indices.size() == 2) {
+    char index0 = result_indices.at(0), index1 = result_indices.at(1);
     if (!indices_size.contains(index0)) {
       throw EvaluationError(std::format("unknown index `{}` for result", index0));
     }
@@ -238,10 +203,39 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   return result;
 }
 
+inline indices_t _parse_indices(const std::string& input, uint64_t& position) {
+  if (position >= input.length()) {
+    throw ParserError(position, "expected indices, got EOS");
+  }
+
+  if (!isalpha(input[position])) {
+    throw ParserError(position, "expected a letter for indices");
+  }
+
+  indices_t indices;
+  while (position < input.length() && isalpha(input[position])) {
+    indices.push_back(input[position]);
+    position++;
+  }
+
+  if (indices.empty()) {
+    throw ParserError(position, "expected at least one index");
+  }
+
+  if (indices.size() > 3) {
+    throw ParserError(position, std::format("too many indices ({}), armadillo only can go up to 3", indices.size()));
+  }
+
+  return indices;
+}
+
 /**
- * Parse a given equation
+ * Parse a given equation:
  *
- * @param equation the equation, a string containing `EQUATION` (defined in class `Equation`)
+ * EQUATION := INDICES (',' INDICES)* ('->' INDICES)?
+ * INDICES := [a-zA-Z]{0,3}
+ *
+ * @param equation the equation
  * @return a valid `Equation` if `equation` is a valid string
  */
 inline Equation parse(const std::string& equation) {
@@ -252,10 +246,10 @@ inline Equation parse(const std::string& equation) {
   uint64_t i = 0;
 
   // parse operands
-  std::vector<Indices> operands;
+  std::vector<indices_t> eq;
   while (i < equation.length()) {
     if (isalpha(equation[i])) {
-      operands.push_back(_parse_indices(equation, i));
+      eq.push_back(_parse_indices(equation, i));
     } else if (equation[i] == ',') {
       i++;
     } else if (equation[i] == '-') {
@@ -265,7 +259,7 @@ inline Equation parse(const std::string& equation) {
     }
   }
 
-  if (operands.empty()) {
+  if (eq.empty()) {
     throw ParserError(i, "expected at least one operand");
   }
 
@@ -278,23 +272,24 @@ inline Equation parse(const std::string& equation) {
     i++;
 
     if (i == equation.length()) {  // result is a single number
-      return {operands, Indices()};
+      eq.push_back(indices_t());
+      return Equation(eq);
     }
 
     // there are indices for result
-    Indices result = _parse_indices(equation, i);
+    eq.push_back(_parse_indices(equation, i));
 
     if (i != equation.length()) {
       throw ParserError(i, "expected EOS, but the string is longer");
     }
 
-    return {operands, result};
+    return Equation(eq);
   }
 
   // if not, non-repeated indices in order
-  std::vector<char> nri;
-  for (auto& operand : operands) {
-    for (const auto& c : operand.indices()) {
+  indices_t nri;
+  for (auto& operand : eq) {
+    for (const auto& c : operand) {
       if (auto position = std::find(nri.begin(), nri.end(), c); position != nri.end()) {
         nri.erase(position);
       } else {
@@ -303,7 +298,13 @@ inline Equation parse(const std::string& equation) {
     }
   }
 
-  return {operands, Indices(nri)};
+  if (nri.size() > 3) {
+    throw ParserError(i, std::format("too many indices ({}) in result, armadillo only can go up to 3", nri.size()));
+  }
+
+  eq.push_back(nri);
+
+  return Equation(eq);
 }
 
 template <typename T, ArmadilloType... Types>
