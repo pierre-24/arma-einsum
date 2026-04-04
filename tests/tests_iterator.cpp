@@ -5,7 +5,7 @@ class IteratorTests : public AETestsSuite {};
 
 TEST_F(IteratorTests, test_iterator) {
   armaeinsum::IndicesIterator it({{'a', 2}, {'b', 3}, {'c',  2}});
-  bool set[2][3][2];
+  bool set[2][3][2] = {false};
 
   while (it.has_next()) {
     auto r = *it;
@@ -24,7 +24,7 @@ TEST_F(IteratorTests, test_iterator) {
 
 TEST_F(IteratorTests, test_iterator_with_fixed) {
   armaeinsum::IndicesIterator it({{'a', 2}, {'b', 3}}, {{'c', 1}});
-  bool set[2][3][2];
+  bool set[2][3][2] = {false};
 
   while (it.has_next()) {
     auto r = *it;
