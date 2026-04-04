@@ -28,7 +28,8 @@ Just copy [`arma_einsum.hpp`](arma_einsum.hpp) into your project and make sure A
 
 That’s it: no build system changes or additional dependencies required.
 
-If you want to use older compilers, you can switch from `std::format` to, e.g.,  [`fmt`](https://github.com/fmtlib/fmt) by installing it and using
+If you want to use older compilers where `std::format` is not available, you can switch to a library with an equivalent function, e.g.,  [`fmt`](https://github.com/fmtlib/fmt) (Boost's [`format`](https://www.boost.org/doc/libs/latest/libs/format/doc/format.html) should also work).
+For example, for `fmt`, [install it](https://fmt.dev/12.0/get-started/) and use
 
 ```cpp
 #include <fmt/format.h>
@@ -36,6 +37,7 @@ If you want to use older compilers, you can switch from `std::format` to, e.g., 
 ```
 
 before including `arma_einsum.hpp`.
+See [this example](./example-meson/main_fmt.cpp).
 
 If you want to use a Meson wrap file instead, check [the example](example-meson).
 

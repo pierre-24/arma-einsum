@@ -17,13 +17,23 @@ arma_einsum_proj = subproject('arma-einsum', default_options: ['tests=false'])
 arma_einsum_dep = arma_einsum_proj.get_variable('arma_einsum_dep')
 project_dep += arma_einsum_dep
 
-# source
-srcs = ['main.cpp']
-
-# Executable
 test_exe = executable(
   meson.project_name(), 
-  srcs,
+  'main.cpp',
+  dependencies: project_dep,
+  c_args : build_args,
+  install: true
+)
+
+# add fmt
+fmt_proj = subproject('fmt')
+fmt_dep = fmt_proj.get_variable('fmt_dep')
+project_dep += fmt_dep
+
+
+test_exe = executable(
+  meson.project_name() + '_fmt',
+  'main_fmt.cpp',
   dependencies: project_dep,
   c_args : build_args,
   install: true
