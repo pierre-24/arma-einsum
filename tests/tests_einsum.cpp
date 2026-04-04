@@ -1,3 +1,4 @@
+#include <armadillo>
 #include <arma_einsum.hpp>
 
 #include <iostream>

@@ -1,17 +1,15 @@
 #ifndef ARMA_EINSUM_HPP_
 #define ARMA_EINSUM_HPP_
 
-#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 #include <algorithm>
-#include <tuple>
+#include <cstdint>
+#include <format>
 #include <map>
-
-#include <armadillo>
 
 namespace armaeinsum {
 

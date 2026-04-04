@@ -1,4 +1,5 @@
-#include "arma_einsum.hpp"
+#include <armadillo>
+#include <arma_einsum.hpp>
 #include "tests.hpp"
 
 class IteratorTests : public AETestsSuite {};

@@ -1,3 +1,4 @@
+#include <armadillo>
 #include <arma_einsum.hpp>
 
 #include <string>
@@ -14,6 +15,14 @@ TEST_F(ParserTests, SimpleTest) {
   // trace
   eq = armaeinsum::parse("ii");
   EXPECT_EQ("ii->", std::string(eq));
+
+  // keep as is
+  eq = armaeinsum::parse("ij");
+  EXPECT_EQ("ij->ij", std::string(eq));
+
+  // sum
+  eq = armaeinsum::parse("ij->");
+  EXPECT_EQ("ij->", std::string(eq));
 
   // matrix product
   eq = armaeinsum::parse("ik,kj");
