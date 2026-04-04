@@ -31,11 +31,81 @@ class EvaluationError: public std::runtime_error {
   explicit EvaluationError(const std::string& msg) : runtime_error(msg) {}
 };
 
+
+using multival_t = std::map<char, uint64_t>;
+
+/**
+ * Iterator over multiple indices
+ */
+class IndicesIterator {
+ private:
+  /// list of indices
+  std::vector<char> _indices;
+  /// List of max
+  std::vector<uint64_t> _max_per_index;
+  /// Fixed values, added as is to the result
+  multival_t _fixed_values;
+  /// Internal counter
+  uint64_t _counter;
+  /// Internal total, computed as `prod(_max_per_index)`
+  uint64_t _total;
+
+ public:
+  IndicesIterator() = delete;
+
+  /**
+   * Create an iterator
+   *
+   * @param indices list indices and their max value
+   * @param fixed set of extra indices which has a fixed value (added as is to the result)
+   */
+  explicit IndicesIterator(const multival_t& indices, const multival_t& fixed = {})
+  : _fixed_values(fixed), _counter(0), _total(1) {
+    if (indices.empty()) {
+      _total = 0;
+    } else {
+      for (auto& index : indices) {
+        if (!fixed.contains(index.first)) {
+          _indices.push_back(index.first);
+          _max_per_index.push_back(index.second);
+          _total *= index.second;
+        }
+      }
+    }
+  }
+
+  /// Is there a next value?
+  [[nodiscard]] bool has_next() const {
+    return _counter < _total;
+  }
+
+  /// Get current value (with fixed)
+  multival_t operator*() const {
+    multival_t result = _fixed_values;
+    uint64_t last_index = _indices.size() - 1;
+
+    uint64_t i = _counter;
+
+    for (uint64_t ri = 0; ri < _indices.size(); ri++) {
+      result[_indices.at(last_index - ri)] = i % _max_per_index.at(last_index - ri);
+      i /= _max_per_index.at(last_index - ri);
+    }
+
+    return result;
+  }
+
+  /// Iterate
+  void next() {
+    if (has_next()) {
+      _counter++;
+    }
+  }
+};
+
 using indices_t = std::vector<char>;
 
 /**
  * Equation
- *
  */
 class Equation {
  private:

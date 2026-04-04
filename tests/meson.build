@@ -9,6 +9,7 @@ tests_deps += gtest_dep
 # create tests suite
 tests = [
     'parser',
+    'iterator',
     'einsum',
 ]
 
