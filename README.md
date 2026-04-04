@@ -6,7 +6,8 @@ It enables expressive tensor-style operations (dot products, traces, contraction
 
 ## Notes & Limitations
 
-- Requires C++20 and the support of [`std::format`](https://github.com/paulkazusek/std_format_cheatsheet/blob/main/README.md#requirement) (i.e., GCC >= 13.1 or clang >= 14)
+- Requires C++20 
+- Requires support of [`std::format`](https://github.com/paulkazusek/std_format_cheatsheet/blob/main/README.md#requirement) (i.e., GCC >= 13.1 or clang >= 14). It is however possible to use another equivalent library (see below).
 - Supports OMP.
 - Due to the use of Armadillo, only supports outputs up to **rank-2 (matrices)**.
 - No support for:
@@ -26,6 +27,15 @@ Just copy [`arma_einsum.hpp`](arma_einsum.hpp) into your project and make sure A
 ```
 
 That’s it: no build system changes or additional dependencies required.
+
+If you want to use older compilers, you can switch from `std::format` to, e.g.,  [`fmt`](https://github.com/fmtlib/fmt) by installing it and using
+
+```cpp
+#include <fmt/format.h>
+#define ARMA_EINSUM_FORMAT fmt::format
+```
+
+before including `arma_einsum.hpp`.
 
 If you want to use a Meson wrap file instead, check [the example](example-meson).
 

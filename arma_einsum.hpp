@@ -9,8 +9,12 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
-#include <format>
 #include <map>
+
+#ifndef ARMA_EINSUM_FORMAT  // use std::format by default
+#include <format>
+#define ARMA_EINSUM_FORMAT std::format
+#endif
 
 namespace armaeinsum {
 
@@ -21,7 +25,7 @@ class ParserError: public std::runtime_error {
  public:
   ParserError() = delete;
   explicit ParserError(uint64_t position, const std::string& msg) :
-    runtime_error(std::format("error at position {}: {}", position, msg)) {}
+    runtime_error(ARMA_EINSUM_FORMAT("error at position {}: {}", position, msg)) {}
 };
 
 class EvaluationError: public std::runtime_error {
@@ -154,7 +158,7 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
 
   // 2. Validate operand count
   if (sizeof...(Types) != _eq.size() - 1) {
-    throw EvaluationError(std::format("Expected {} operands, got {}", _eq.size() - 1, sizeof...(Types)));
+    throw EvaluationError(ARMA_EINSUM_FORMAT("Expected {} operands, got {}", _eq.size() - 1, sizeof...(Types)));
   }
 
   multival_t indices_size;
@@ -176,7 +180,7 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
       }
 
       if (op_labels.size() != actual_rank) {
-        throw EvaluationError(std::format("Rank mismatch for operand #{}", idx));
+        throw EvaluationError(ARMA_EINSUM_FORMAT("Rank mismatch for operand #{}", idx));
       }
 
       // Map index labels to actual Armadillo dimensions
@@ -194,7 +198,7 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
 
         if (indices_size.contains(label)) {
           if (indices_size[label] != d_size) {
-            throw EvaluationError(std::format("Size mismatch for index '{}'", label));
+            throw EvaluationError(ARMA_EINSUM_FORMAT("Size mismatch for index '{}'", label));
           }
         } else {
           indices_size[label] = d_size;
@@ -304,7 +308,8 @@ inline indices_t _parse_indices(const std::string& input, uint64_t& position) {
   }
 
   if (indices.size() > 3) {
-    throw ParserError(position, std::format("too many indices ({}), armadillo only can go up to 3", indices.size()));
+    throw ParserError(
+      position, ARMA_EINSUM_FORMAT("too many indices ({}), armadillo only can go up to 3", indices.size()));
   }
 
   return indices;
@@ -380,7 +385,8 @@ inline Equation parse(const std::string& equation) {
   }
 
   if (nri.size() > 3) {
-    throw ParserError(i, std::format("too many indices ({}) in result, armadillo only can go up to 3", nri.size()));
+    throw ParserError(
+      i, ARMA_EINSUM_FORMAT("too many indices ({}) in result, armadillo only can go up to 3", nri.size()));
   }
 
   eq.push_back(nri);
