@@ -215,103 +215,65 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   } else {
     result.set_size(indices_size.at(result_indices[0]), indices_size.at(result_indices[1]));
   }
-  result.zeros();  // ensure memory is zeroed
+  result.zeros();
 
-  // 5. Evaluation
+  // 5. Evaluate
+
+  // Perform multiplication across all operands
+  auto compute_product = [&]<std::size_t... I>(const multival_t& v, std::index_sequence<I...>) -> T {
+    T product = 1;
+    ([&](auto idx, const auto& op) {
+      using OpType = std::decay_t<decltype(op)>;
+      const auto& labels = _eq[idx];
+
+      if constexpr (arma::is_arma_cube_type<OpType>::value) {
+        product *= op.at(v.at(labels[0]), v.at(labels[1]), v.at(labels[2]));
+      } else if constexpr (arma::is_Col<OpType>::value || arma::is_Row<OpType>::value) {
+        product *= op.at(v.at(labels[0]));
+      } else {
+        product *= op.at(v.at(labels[0]), v.at(labels[1]));
+      }
+    }(I, operands), ...);
+    return product;
+  };
+
+  constexpr auto seq = std::make_index_sequence<sizeof...(Types)>{};
+
   if (result_indices.empty()) {
     IndicesIterator it(indices_size);
     T accum = 0;
 
-#pragma omp parallel for reduction(+:accum)
-    for (uint64_t ix=0; ix < it.total(); ++ix) {
-      T product = 1;
-      multival_t v = it.convert(ix);
-
-      // Perform multiplication across all operands
-      auto multiply_operands = [&]<std::size_t... I>(std::index_sequence<I...>) {
-        (
-            [&](auto idx, const auto& op) {
-              using OpType = std::decay_t<decltype(op)>;
-              const auto& labels = _eq[idx];
-
-              if constexpr (arma::is_arma_cube_type<OpType>::value) {
-                product *= op.at(v.at(labels[0]), v.at(labels[1]), v.at(labels[2]));
-              } else if constexpr (arma::is_Col<OpType>::value || arma::is_Row<OpType>::value) {
-                product *= op.at(v.at(labels[0]));
-              } else {
-                product *= op.at(v.at(labels[0]), v.at(labels[1]));
-              }
-            }(I, operands), ...);
-      };  // NOLINT
-      multiply_operands(std::make_index_sequence<sizeof...(Types)>{});
-      accum += product;
+    #pragma omp parallel for reduction(+:accum) default(none) shared(it, seq, compute_product)
+    for (uint64_t ix = 0; ix < it.total(); ++ix) {
+      accum += compute_product(it.convert(ix), seq);
     }
+
     result.at(0, 0) = accum;
   } else if (result_indices.size() == 1) {
-    char index0 = result_indices.at(0);
+    char idx0 = result_indices[0];
 
-    for (uint64_t irow = 0; irow < indices_size.at(index0); irow++) {
+    #pragma omp parallel for default(none) shared(seq, compute_product, result, indices_size, idx0)
+    for (uint64_t irow = 0; irow < indices_size.at(idx0); ++irow) {
       T accum = 0;
-      IndicesIterator it(indices_size, {{index0, irow}});
+      IndicesIterator it(indices_size, {{idx0, irow}});
 
-#pragma omp parallel for reduction(+:accum)
-      for (uint64_t ix=0; ix < it.total(); ++ix) {
-        T product = 1;
-        multival_t v = it.convert(ix);
-
-        // Perform multiplication across all operands
-        auto multiply_operands = [&]<std::size_t... I>(std::index_sequence<I...>) {
-          (
-              [&](auto idx, const auto& op) {
-                using OpType = std::decay_t<decltype(op)>;
-                const auto& labels = _eq[idx];
-
-                if constexpr (arma::is_arma_cube_type<OpType>::value) {
-                  product *= op.at(v.at(labels[0]), v.at(labels[1]), v.at(labels[2]));
-                } else if constexpr (arma::is_Col<OpType>::value || arma::is_Row<OpType>::value) {
-                  product *= op.at(v.at(labels[0]));
-                } else {
-                  product *= op.at(v.at(labels[0]), v.at(labels[1]));
-                }
-              }(I, operands), ...);
-        };  // NOLINT
-        multiply_operands(std::make_index_sequence<sizeof...(Types)>{});
-        accum += product;
+      for (uint64_t ix = 0; ix < it.total(); ++ix) {
+        accum += compute_product(it.convert(ix), seq);
       }
 
       result.at(irow) = accum;
     }
   } else {
-    char index0 = result_indices.at(0), index1 = result_indices.at(1);
+    char idx0 = result_indices[0], idx1 = result_indices[1];
 
-    for (uint64_t irow = 0; irow < indices_size.at(index0); irow++) {
-      for (uint64_t icol = 0; icol < indices_size.at(index1); icol++) {
+    #pragma omp parallel for default(none) shared(seq, compute_product, result, indices_size, idx0, idx1)
+    for (uint64_t irow = 0; irow < indices_size.at(idx0); ++irow) {
+      for (uint64_t icol = 0; icol < indices_size.at(idx1); ++icol) {
         T accum = 0;
-        IndicesIterator it(indices_size, {{index0, irow}, {index1, icol}});
+        IndicesIterator it(indices_size, {{idx0, irow}, {idx1, icol}});
 
-#pragma omp parallel for reduction(+:accum)
-        for (uint64_t ix=0; ix < it.total(); ++ix) {
-          T product = 1;
-          multival_t v = it.convert(ix);
-
-          // Perform multiplication across all operands
-          auto multiply_operands = [&]<std::size_t... I>(std::index_sequence<I...>) {
-            (
-                [&](auto idx, const auto& op) {
-                  using OpType = std::decay_t<decltype(op)>;
-                  const auto& labels = _eq[idx];
-
-                  if constexpr (arma::is_arma_cube_type<OpType>::value) {
-                    product *= op.at(v.at(labels[0]), v.at(labels[1]), v.at(labels[2]));
-                  } else if constexpr (arma::is_Col<OpType>::value || arma::is_Row<OpType>::value) {
-                    product *= op.at(v.at(labels[0]));
-                  } else {
-                    product *= op.at(v.at(labels[0]), v.at(labels[1]));
-                  }
-                }(I, operands), ...);
-          };  // NOLINT
-          multiply_operands(std::make_index_sequence<sizeof...(Types)>{});
-          accum += product;
+        for (uint64_t ix = 0; ix < it.total(); ++ix) {
+          accum += compute_product(it.convert(ix), seq);
         }
 
         result.at(irow, icol) = accum;

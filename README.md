@@ -1,16 +1,17 @@
 # `arma-einsum`
 
-A lightweight (and intentionally simple) implementation of NumPy’s [`einsum()`](https://numpy.org/doc/stable/reference/generated/numpy.einsum.html) for C++, built on top of Armadillo.
+A lightweight (and [limited](#notes--limitations)) implementation of NumPy’s [`einsum()`](https://numpy.org/doc/stable/reference/generated/numpy.einsum.html) for C++, built on top of Armadillo.
 
 It enables expressive tensor-style operations (dot products, traces, contractions, etc.) using a compact Einstein summation notation.
 
 ## Notes & Limitations
 
-- Only supports outputs up to **rank-2 (matrices)**.
+- Supports OMP.
+- Due to the use of Armadillo, only supports outputs up to **rank-2 (matrices)**.
 - No support for:
     - Ellipsis (`...`)
     - Broadcasting (NumPy-style)
-- **No OMP acceleration at the moment** (or any other optimization, for that matter), so the performances are NOT optimal.
+- No [optimization](https://optimized-einsum.readthedocs.io/en/stable/) via the creation of intermediate, so performances are suboptimal.
 
 ## Installation
 
@@ -33,7 +34,7 @@ armaeinsum::einsum_mat("equation", operand1, operand2, ...);
 
 ### Parameters
 
-- **`equation`**: A string describing the Einstein summation.
+- **`equation`**: A string describing the Einstein summation (see below).
 - **`operands`**: A variadic list of Armadillo objects:
     - `arma::Col`
     - `arma::Row`
@@ -70,12 +71,12 @@ Assume:
 - `a`, `b` are vectors (`arma::Col` or `arma::Row`)
 - `A`, `B` are matrices (`arma::Mat`)
 
-| Expression            | Description                  |
-|----------------------|------------------------------|
-| `("i,i", a, b)`      | Dot product                  |
-| `("i,j->ij", a, b)`  | Outer product                |
-| `("ii", A)`          | Trace                        |
-| `("ij->ji", A)`      | Transpose                    |
-| `("ij->", A)`        | Sum of all elements          |
-| `("ij,j", A, a)`     | Matrix-vector multiplication |
-| `("ik,kj", A, B)`    | Matrix-matrix multiplication |
+| Expression            | Description                   |
+|-----------------------|-------------------------------|
+| `("i,i", a, b)`       | Dot product                   |
+| `("i,j->ij", a, b)`   | Outer product                 |
+| `("ii", A)`           | Trace                         |
+| `("ij->ji", A)`       | Transpose                     |
+| `("ij->", A)`         | Sum of all elements           |
+| `("ij,j", A, a)`      | Matrix-vector multiplication  |
+| `("ik,kj", A, B)`     | Matrix-matrix multiplication  |
