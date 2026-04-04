@@ -196,10 +196,9 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   auto pack_tuple = std::forward_as_tuple(operands...);
 
   // specify and check the type of each array in operands
-  std::map<char, uint64_t> indices_size;
-  uint64_t iop = 0;
+  multival_t indices_size;
 
-  auto define_and_check = [&]<typename T0>(const T0 & op) {
+  auto define_and_check = [&]<typename T0>(uint64_t& iop_, const T0 & op) {
     std::vector<uint64_t> op_dims;
     if (arma::is_Col<std::decay_t<T0>>::value) {
       op_dims.push_back(op.n_rows);
@@ -210,12 +209,12 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
       op_dims.push_back(op.n_cols);
     }
 
-    const auto& op_indices = _eq.at(iop);
+    const auto& op_indices = _eq.at(iop_);
 
     if (op_dims.size() != op_indices.size()) {
       throw EvaluationError(
         std::format("operand size ({}) and actual operand size ({}) mismatch for operand #{}",
-          op_dims.size(), op_indices.size(), iop));
+          op_dims.size(), op_indices.size(), iop_));
     }
 
     for (uint64_t i = 0; i < op_dims.size(); i++) {
@@ -231,15 +230,39 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
       }
     }
 
-    iop++;
+    iop_++;
   };  // NOLINT
 
-  (define_and_check(operands), ...);
+  uint64_t iop = 0;
+  (define_and_check(iop, operands), ...);
 
   // set result size & evaluate
   arma::Mat<T> result(1, 1);
 
+  auto evaluate_mat = [&]<typename T0>(uint64_t& iop_, T& val, const multival_t& v_, const T0& op) {
+    const auto& op_indices = _eq.at(iop_);
+
+    if (arma::is_Col<std::decay_t<T0>>::value) {
+      val *= op.at(v_.at(op_indices.at(0)));
+    } else if (arma::is_Row<std::decay_t<T0>>::value) {
+      val *= op.at(v_.at(op_indices.at(0)));
+    }  else {  // assume a matrix (and hope for the best)
+      val *= op.at(v_.at(op_indices.at(0)), v_.at(op_indices.at(1)));
+    }
+
+    iop_++;
+  };  // NOLINT
+
   if (result_indices.empty()) {
+    IndicesIterator it(indices_size);
+    while (it.has_next()) {
+      auto val = *it;
+      T tmp = 1;
+      iop = 0;
+      (evaluate_mat(iop, tmp, val, operands), ...);
+      result.at(0, 0) += tmp;
+      it.next();
+    }
   } else if (result_indices.size() == 1) {
     char index0 = result_indices.at(0);
     if (!indices_size.contains(index0)) {
@@ -247,11 +270,17 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
     }
     result.resize(indices_size.at(index0));
 
-#pragma omp parallel for
     for (uint64_t irow = 0; irow < indices_size.at(index0); irow++) {
-      result.at(irow) = 0;
+      IndicesIterator it(indices_size, {{index0, irow}});
+      while (it.has_next()) {
+        auto val = *it;
+        T tmp = 1;
+        iop = 0;
+        (evaluate_mat(iop, tmp, val, operands), ...);
+        result.at(irow) += tmp;
+        it.next();
+      }
     }
-
   } else if (result_indices.size() == 2) {
     char index0 = result_indices.at(0), index1 = result_indices.at(1);
     if (!indices_size.contains(index0)) {
@@ -262,10 +291,17 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
     }
     result.resize(indices_size.at(index0), indices_size.at(index1));
 
-#pragma omp parallel for
     for (uint64_t irow = 0; irow < indices_size.at(index0); irow++) {
       for (uint64_t icol = 0; icol < indices_size.at(index1); icol++) {
-        result.at(irow, icol) = 0;
+        IndicesIterator it(indices_size, {{index0, irow}, {index1, icol}});
+        while (it.has_next()) {
+          auto val = *it;
+          T tmp = 1;
+          iop = 0;
+          (evaluate_mat(iop, tmp, val, operands), ...);
+          result.at(irow, icol) += tmp;
+          it.next();
+        }
       }
     }
   }
@@ -356,7 +392,7 @@ inline Equation parse(const std::string& equation) {
     return Equation(eq);
   }
 
-  // if not, non-repeated indices in order
+  // if not, use non-repeated indices in order
   indices_t nri;
   for (auto& operand : eq) {
     for (const auto& c : operand) {

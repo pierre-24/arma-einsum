@@ -46,4 +46,6 @@ arma_einsum_dep = declare_dependency(
     dependencies: lib_deps
 )
 
-subdir('tests')
+if get_option('tests')
+    subdir('tests')
+endif

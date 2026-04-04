@@ -6,13 +6,21 @@ gtest_dep = gtest_proj.get_variable('gtest_dep')
 
 tests_deps += gtest_dep
 
+# linear algebra backend
+foreach pkg: get_option('la_packages')
+    tests_deps += dependency(pkg, required: true)
+endforeach
+
+foreach lib: get_option('la_libraries')
+    tests_deps += cc.find_library(lib, required : true)
+endforeach
+
 # create tests suite
 tests = [
     'parser',
     'iterator',
     'einsum',
 ]
-
 
 foreach t: tests
     test_exec = executable(

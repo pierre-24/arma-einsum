@@ -7,27 +7,80 @@
 class ParserTests : public AETestsSuite {};
 
 TEST_F(ParserTests, dot) {
-  arma::Col<TEST_FLOAT> a = arma::linspace(1, 5, 5);
-  arma::Col<TEST_FLOAT> b = arma::linspace(1, 5, 5);
+  auto a = arma::randn<arma::Col<TEST_FLOAT>>(5);
+  auto b = arma::randn<arma::Col<TEST_FLOAT>>(5);
 
-  std::cout << armaeinsum::einsum_mat<TEST_FLOAT>("i,i->", a, b) << std::endl;
+  EXPECT_NEAR(
+    armaeinsum::einsum_mat<TEST_FLOAT>("i,i->", a, b).at(0, 0),
+    arma::dot(a, b),
+    1e-5);
+}
+
+TEST_F(ParserTests, outer) {
+  auto a = arma::randn<arma::Col<TEST_FLOAT>>(5);
+  auto b = arma::randn<arma::Col<TEST_FLOAT>>(5);
+
+  EXPECT_TRUE(arma::approx_equal(
+    armaeinsum::einsum_mat<TEST_FLOAT>("i,j", a, b),
+    a * b.t(),
+    "abstol", 1e-5));
 }
 
 TEST_F(ParserTests, trace) {
-  arma::Mat<TEST_FLOAT> A = arma::eye(5, 5);
+  auto A = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
 
-  std::cout << armaeinsum::einsum_mat<TEST_FLOAT>("ii->", A) << std::endl;
+  EXPECT_NEAR(
+    armaeinsum::einsum_mat<TEST_FLOAT>("ii->", A).at(0, 0),
+    arma::trace(A),
+    1e-5);
 }
 
-TEST_F(ParserTests, daxpy) {
-  arma::Mat<TEST_FLOAT> A = arma::eye(5, 5);
-  arma::Col<TEST_FLOAT> b = arma::linspace(1, 5, 5);
+TEST_F(ParserTests, transpose) {
+  auto A = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
 
-  std::cout << armaeinsum::einsum_mat<TEST_FLOAT>("ik,k->i", A, b) << std::endl;
+  EXPECT_TRUE(arma::approx_equal(
+    armaeinsum::einsum_mat<TEST_FLOAT>("ij->ji", A),
+    A.t(),
+    "abstol", 1e-5));
 }
 
-TEST_F(ParserTests, matmul) {
-  arma::Mat<TEST_FLOAT> A = arma::eye(5, 5);
+TEST_F(ParserTests, axpy) {
+  auto A = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
+  auto b = arma::randn<arma::Col<TEST_FLOAT>>(5);
 
-  std::cout << armaeinsum::einsum_mat<TEST_FLOAT>("ik,kj->ij", A, A) << std::endl;
+  EXPECT_TRUE(arma::approx_equal(
+    armaeinsum::einsum_mat<TEST_FLOAT>("ik,k->i", A, b),
+    A * b,
+    "abstol", 1e-5));
+}
+
+TEST_F(ParserTests, gemm) {
+  auto A = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
+  auto B = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
+
+  EXPECT_TRUE(arma::approx_equal(
+    armaeinsum::einsum_mat<TEST_FLOAT>("ik,kj->ij", A, B),
+    A * B,
+    "abstol", 1e-5));
+}
+
+TEST_F(ParserTests, orthogonal) {
+  auto R = arma::randn<arma::Mat<TEST_FLOAT>>(8, 5);
+
+  EXPECT_TRUE(arma::approx_equal(
+    armaeinsum::einsum_mat<TEST_FLOAT>("ji,jk->ik", R, R),
+    R.t() * R,
+    "abstol", 1e-5));
+}
+
+TEST_F(ParserTests, unitary_transformation) {
+  auto R = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
+  R = R + R.t();
+
+  auto B = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
+
+  EXPECT_TRUE(arma::approx_equal(
+    armaeinsum::einsum_mat<TEST_FLOAT>("ji,jk,kl->il", R, B, R),
+    R.t() * B * R,
+    "abstol", 1e-5));
 }
