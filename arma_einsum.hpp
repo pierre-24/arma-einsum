@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <format>
 #include <map>
@@ -43,8 +44,6 @@ class IndicesIterator {
   std::vector<uint64_t> _max_per_index;
   /// Fixed values, added as is to the result
   multival_t _fixed_values;
-  /// Internal counter
-  uint64_t _counter;
   /// Internal total, computed as `prod(_max_per_index)`
   uint64_t _total;
 
@@ -58,9 +57,9 @@ class IndicesIterator {
    * @param fixed set of extra indices which has a fixed value (added as is to the result)
    */
   explicit IndicesIterator(const multival_t& indices, const multival_t& fixed = {})
-  : _fixed_values(fixed), _counter(0), _total(1) {
+  : _fixed_values(fixed), _total(1) {
     if (indices.empty()) {
-      _total = 0;
+      _total = 1;
     } else {
       for (auto& index : indices) {
         if (!fixed.contains(index.first)) {
@@ -72,17 +71,16 @@ class IndicesIterator {
     }
   }
 
-  /// Is there a next value?
-  [[nodiscard]] bool has_next() const {
-    return _counter < _total;
-  }
+  uint64_t total() const { return _total; }
 
   /// Get current value (with fixed)
-  multival_t operator*() const {
+  multival_t convert(uint64_t counter) const {
+    assert(counter < _total);
+
     multival_t result = _fixed_values;
     uint64_t last_index = _indices.size() - 1;
 
-    uint64_t i = _counter;
+    uint64_t i = counter;
 
     for (uint64_t ri = 0; ri < _indices.size(); ri++) {
       result[_indices.at(last_index - ri)] = i % _max_per_index.at(last_index - ri);
@@ -90,13 +88,6 @@ class IndicesIterator {
     }
 
     return result;
-  }
-
-  /// Iterate
-  void next() {
-    if (has_next()) {
-      _counter++;
-    }
   }
 };
 
@@ -228,8 +219,8 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
 
   // 5. Evaluation Loop
   IndicesIterator it(indices_size);
-  while (it.has_next()) {
-    const auto& v = *it;
+  for (uint64_t ix=0; ix < it.total(); ++ix) {
+    auto v = it.convert(ix);
     T product = 1;
 
     // Perform multiplication across all operands
@@ -259,8 +250,6 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
     } else {
       result.at(v.at(result_indices[0]), v.at(result_indices[1])) += product;
     }
-
-    it.next();
   }
 
   return result;
