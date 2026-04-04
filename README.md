@@ -6,6 +6,7 @@ It enables expressive tensor-style operations (dot products, traces, contraction
 
 ## Notes & Limitations
 
+- Requires C++20.
 - Supports OMP.
 - Due to the use of Armadillo, only supports outputs up to **rank-2 (matrices)**.
 - No support for:
@@ -15,7 +16,7 @@ It enables expressive tensor-style operations (dot products, traces, contraction
 
 ## Installation
 
-Just copy [`arma_einsum.hpp`](arma_einsum.hpp) into your project and make sure Armadillo is properly set up.
+Just copy [`arma_einsum.hpp`](arma_einsum.hpp) into your project and make sure Armadillo is properly set up, with OpenMP enabled.
 
 ```cpp
 #define ARMA_USE_OPENMP
@@ -29,11 +30,12 @@ That’s it: no build system changes or additional dependencies required.
 ## Usage
 
 ```cpp
-armaeinsum::einsum_mat("equation", operand1, operand2, ...);
+armaeinsum::einsum_mat<T>("equation", operand1, operand2, ...);
 ```
 
 ### Parameters
 
+- **`T`**: Any floating point type supported by Armadillo (mixing types is not supported).
 - **`equation`**: A string describing the Einstein summation (see below).
 - **`operands`**: A variadic list of Armadillo objects:
     - `arma::Col`
