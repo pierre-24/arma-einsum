@@ -1,8 +1,6 @@
 #include <armadillo>
 #include <arma_einsum.hpp>
 
-#include <iostream>
-
 #include "tests.hpp"
 
 class ParserTests : public AETestsSuite {};

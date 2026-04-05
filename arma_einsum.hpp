@@ -170,11 +170,11 @@ class Equation {
    * @param operands operands, must match `n()`
    * @return a matrix defined by the equation
    */
-  template <typename T, ArmadilloType... Types> arma::Mat<T> evaluate_mat(const Types&... operands);
+  template <typename T, ArmadilloType... Types> arma::Mat<T> evaluate_mat(const Types&... operands) const;
 };
 
 template <typename T, ArmadilloType... Types>
-arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
+arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
   // 1. Basic validation of result dimensionality
   const auto& result_indices = _eq.back();
   if (result_indices.size() > 2) {
@@ -356,6 +356,29 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   return result;
 }
 
+class ContractionEngine {
+ public:
+  ContractionEngine() = default;
+
+  /**
+   * Evaluate `eq` by optimzing it if possible
+   *
+   * @tparam T a floating-point type
+   * @tparam Types Armadillo objects
+   * @param eq an equation
+   * @param operands Armadillo objects
+   * @return a matrix with the evaluated result
+   */
+  template <typename T, ArmadilloType... Types>
+  arma::Mat<T> evaluate_mat(const Equation& eq, const Types&... operands) const;
+};
+
+template <typename T, ArmadilloType ... Types>
+arma::Mat<T> ContractionEngine::evaluate_mat(const Equation& eq, const Types&... operands) const {
+  return eq.evaluate_mat<T>(operands...);
+}
+
+/// Parse indices
 inline indices_t _parse_indices(const std::string& input, uint64_t& position) {
   if (position >= input.length()) {
     throw ParserError(position, "expected indices, got EOS");
