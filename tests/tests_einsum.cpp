@@ -72,6 +72,16 @@ TEST_F(ParserTests, gemm) {
     "abstol", 1e-5));
 }
 
+TEST_F(ParserTests, hadamard) {
+  auto A = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
+  auto B = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
+
+  EXPECT_TRUE(arma::approx_equal(
+    armaeinsum::einsum_mat<TEST_FLOAT>("ij,ij->ij", A, B),
+    A % B,
+    "abstol", 1e-5));
+}
+
 TEST_F(ParserTests, orthogonal) {
   auto R = arma::randn<arma::Mat<TEST_FLOAT>>(8, 5);
 

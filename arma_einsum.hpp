@@ -1,6 +1,7 @@
 #ifndef ARMA_EINSUM_HPP_
 #define ARMA_EINSUM_HPP_
 
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -137,6 +138,8 @@ class Equation {
       throw EvaluationError("not enough operands");
     }
   }
+
+  const std::vector<indices_t>& operands() const  { return _eq; }
 
   [[nodiscard]] uint64_t n() const { return _eq.size(); }
 
@@ -356,12 +359,26 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
   return result;
 }
 
+using path_t = std::vector<std::array<uint64_t, 2>>;
+
+template <typename T>
 class ContractionEngine {
+ private:
+  struct Operand {
+    /// Variant to hold intermediates (Mat, Cube, or even a Scalar)
+    std::variant<arma::Mat<T>, arma::Cube<T>, T> data;
+    /// Associated labels
+    indices_t labels;
+  };
+
  public:
   ContractionEngine() = default;
 
+  /// Find a path to evaluate `eq`
+  path_t find_path(const Equation& eq);
+
   /**
-   * Evaluate `eq` by optimzing it if possible
+   * Evaluate `eq` by optimizing it when possible
    *
    * @tparam T a floating-point type
    * @tparam Types Armadillo objects
@@ -369,12 +386,40 @@ class ContractionEngine {
    * @param operands Armadillo objects
    * @return a matrix with the evaluated result
    */
-  template <typename T, ArmadilloType... Types>
+  template <ArmadilloType... Types>
   arma::Mat<T> evaluate_mat(const Equation& eq, const Types&... operands) const;
 };
 
-template <typename T, ArmadilloType ... Types>
-arma::Mat<T> ContractionEngine::evaluate_mat(const Equation& eq, const Types&... operands) const {
+template <typename T>
+path_t ContractionEngine<T>::find_path(const Equation& eq) {
+  path_t result;
+
+  std::vector<indices_t> stack;
+  stack.assign(eq.operands().begin(), eq.operands().end() - 1);
+
+  return result;
+}
+
+template <typename T>
+template <ArmadilloType ... Types>
+arma::Mat<T> ContractionEngine<T>::evaluate_mat(const Equation& eq, const Types&... operands) const {
+  // Unpack variadic operands into a stack using an index sequence
+  std::vector<Operand> stack;
+  stack.reserve(sizeof...(Types));
+  auto unpack = [&]<std::size_t... I>(std::index_sequence<I...>) {
+    ([&](auto idx, const auto& op) {
+        stack.push_back({op, eq.operands()[idx]});
+    }(I, operands), ...);
+  };  // NOLINT
+
+  unpack(std::make_index_sequence<sizeof...(Types)>{});
+
+  if (stack.size() > 1) {
+    std::cout << "need to work" << std::endl;
+  }
+
+  auto final_operand = eq.operands().back();
+
   return eq.evaluate_mat<T>(operands...);
 }
 
