@@ -2,7 +2,7 @@
 bench_deps = [arma_einsum_dep]
 
 # gbench
-gbench_proj = subproject('google-benchmark')
+gbench_proj = subproject('google-benchmark', default_options: ['tests=disabled'])
 gbench_dep = gbench_proj.get_variable('google_benchmark_dep')
 bench_deps += gbench_dep
 
