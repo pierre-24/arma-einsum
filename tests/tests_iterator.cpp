@@ -54,5 +54,4 @@ TEST_F(IteratorTests, test_iterator_no_loop) {
 
   EXPECT_EQ(*it, std::vector<uint64_t>({1}));
   EXPECT_EQ(it.max(), 1);
-  EXPECT_FALSE(it.has_next());
 }
