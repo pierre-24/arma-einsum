@@ -130,8 +130,11 @@ class Equation {
  private:
   std::vector<indices_t> _eq;
 
+  /// Parse the indices starting at `position` in `input`
+  static indices_t _parse_indices(const std::string& input, uint64_t& position);
+
  public:
-  Equation();
+  Equation() = default;
 
   explicit Equation(const std::vector<indices_t>& indices): _eq(indices) {
     if (indices.size() < 2) {
@@ -174,7 +177,117 @@ class Equation {
    * @return a matrix defined by the equation
    */
   template <typename T, ArmadilloType... Types> arma::Mat<T> evaluate_mat(const Types&... operands) const;
+
+
+  /**
+   * Parse a given equation:
+   *
+   * EQUATION := INDICES (',' INDICES)* ('->' INDICES)?
+   * INDICES := [a-zA-Z]{0,3}
+   *
+   * @param equation the equation
+   * @return a valid `Equation` if `equation` is a valid string
+   */
+  static Equation parse(const std::string& equation);
 };
+
+/// Parse indices
+indices_t Equation::_parse_indices(const std::string& input, uint64_t& position) {
+  if (position >= input.length()) {
+    throw ParserError(position, "expected indices, got EOS");
+  }
+
+  if (!isalpha(input[position])) {
+    throw ParserError(position, "expected a letter for indices");
+  }
+
+  indices_t indices;
+  while (position < input.length() && isalpha(input[position])) {
+    indices.push_back(input[position]);
+    position++;
+  }
+
+  if (indices.empty()) {
+    throw ParserError(position, "expected at least one index");
+  }
+
+  if (indices.size() > 3) {
+    throw ParserError(
+      position, ARMA_EINSUM_FORMAT("too many indices ({}), armadillo only can go up to 3", indices.size()));
+  }
+
+  return indices;
+}
+
+Equation Equation::parse(const std::string& equation) {
+  if (equation.empty()) {
+    throw ParserError(0, "empty equation");
+  }
+
+  uint64_t i = 0;
+
+  // parse operands
+  std::vector<indices_t> eq;
+  while (i < equation.length()) {
+    if (isalpha(equation[i])) {
+      eq.push_back(_parse_indices(equation, i));
+    } else if (equation[i] == ',') {
+      i++;
+    } else if (equation[i] == '-') {
+      break;
+    } else {
+      throw ParserError(i, "unexpected character");
+    }
+  }
+
+  if (eq.empty()) {
+    throw ParserError(i, "expected at least one operand");
+  }
+
+  // parse result if any
+  if (equation[i] == '-') {
+    i++;
+    if (equation[i] != '>') {
+      throw ParserError(i, "expected '>'");
+    }
+    i++;
+
+    if (i == equation.length()) {  // result is a single number
+      eq.push_back(indices_t());
+      return Equation(eq);
+    }
+
+    // there are indices for result
+    eq.push_back(_parse_indices(equation, i));
+
+    if (i != equation.length()) {
+      throw ParserError(i, "expected EOS, but the string is longer");
+    }
+
+    return Equation(eq);
+  }
+
+  // if not, use non-repeated indices in order
+  indices_t nri;
+  for (auto& operand : eq) {
+    for (const auto& c : operand) {
+      if (auto position = std::find(nri.begin(), nri.end(), c); position != nri.end()) {
+        nri.erase(position);
+      } else {
+        nri.push_back(c);
+      }
+    }
+  }
+
+  if (nri.size() > 3) {
+    throw ParserError(
+      i, ARMA_EINSUM_FORMAT("too many indices ({}) in result, armadillo only can go up to 3", nri.size()));
+  }
+
+  eq.push_back(nri);
+
+  return Equation(eq);
+}
 
 template <typename T, ArmadilloType... Types>
 arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
@@ -423,116 +536,9 @@ arma::Mat<T> ContractionEngine<T>::evaluate_mat(const Equation& eq, const Types&
   return eq.evaluate_mat<T>(operands...);
 }
 
-/// Parse indices
-inline indices_t _parse_indices(const std::string& input, uint64_t& position) {
-  if (position >= input.length()) {
-    throw ParserError(position, "expected indices, got EOS");
-  }
-
-  if (!isalpha(input[position])) {
-    throw ParserError(position, "expected a letter for indices");
-  }
-
-  indices_t indices;
-  while (position < input.length() && isalpha(input[position])) {
-    indices.push_back(input[position]);
-    position++;
-  }
-
-  if (indices.empty()) {
-    throw ParserError(position, "expected at least one index");
-  }
-
-  if (indices.size() > 3) {
-    throw ParserError(
-      position, ARMA_EINSUM_FORMAT("too many indices ({}), armadillo only can go up to 3", indices.size()));
-  }
-
-  return indices;
-}
-
-/**
- * Parse a given equation:
- *
- * EQUATION := INDICES (',' INDICES)* ('->' INDICES)?
- * INDICES := [a-zA-Z]{0,3}
- *
- * @param equation the equation
- * @return a valid `Equation` if `equation` is a valid string
- */
-inline Equation parse(const std::string& equation) {
-  if (equation.empty()) {
-    throw ParserError(0, "empty equation");
-  }
-
-  uint64_t i = 0;
-
-  // parse operands
-  std::vector<indices_t> eq;
-  while (i < equation.length()) {
-    if (isalpha(equation[i])) {
-      eq.push_back(_parse_indices(equation, i));
-    } else if (equation[i] == ',') {
-      i++;
-    } else if (equation[i] == '-') {
-      break;
-    } else {
-      throw ParserError(i, "unexpected character");
-    }
-  }
-
-  if (eq.empty()) {
-    throw ParserError(i, "expected at least one operand");
-  }
-
-  // parse result if any
-  if (equation[i] == '-') {
-    i++;
-    if (equation[i] != '>') {
-      throw ParserError(i, "expected '>'");
-    }
-    i++;
-
-    if (i == equation.length()) {  // result is a single number
-      eq.push_back(indices_t());
-      return Equation(eq);
-    }
-
-    // there are indices for result
-    eq.push_back(_parse_indices(equation, i));
-
-    if (i != equation.length()) {
-      throw ParserError(i, "expected EOS, but the string is longer");
-    }
-
-    return Equation(eq);
-  }
-
-  // if not, use non-repeated indices in order
-  indices_t nri;
-  for (auto& operand : eq) {
-    for (const auto& c : operand) {
-      if (auto position = std::find(nri.begin(), nri.end(), c); position != nri.end()) {
-        nri.erase(position);
-      } else {
-        nri.push_back(c);
-      }
-    }
-  }
-
-  if (nri.size() > 3) {
-    throw ParserError(
-      i, ARMA_EINSUM_FORMAT("too many indices ({}) in result, armadillo only can go up to 3", nri.size()));
-  }
-
-  eq.push_back(nri);
-
-  return Equation(eq);
-}
-
 template <typename T, ArmadilloType... Types>
 arma::Mat<T> einsum_mat(const std::string& equation, const Types&... operands) {
-  return parse(equation).evaluate_mat<T>(operands...);
+  return Equation::parse(equation).evaluate_mat<T>(operands...);
 }
 
 }  // namespace armaeinsum

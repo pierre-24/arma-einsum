@@ -14,7 +14,7 @@ TEST_F(ContractionTests, dot) {
     std::string eq = "i,i->";
 
     EXPECT_NEAR(
-      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::parse(eq), a, b).at(0, 0),
+      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::Equation::parse(eq), a, b).at(0, 0),
       arma::dot(a, b),
       1e-5);
 }
@@ -25,7 +25,7 @@ TEST_F(ContractionTests, trace) {
     std::string eq = "ii->";
 
     EXPECT_NEAR(
-      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::parse(eq), A).at(0, 0),
+      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::Equation::parse(eq), A).at(0, 0),
       arma::trace(A),
       1e-5);
 }
@@ -37,7 +37,7 @@ TEST_F(ContractionTests, axpy) {
     std::string eq = "ij,j";
 
     EXPECT_TRUE(arma::approx_equal(
-      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::parse(eq), A, b),
+      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::Equation::parse(eq), A, b),
       A * b,
       "abstol", 1e-5));
 }
@@ -49,7 +49,7 @@ TEST_F(ContractionTests, gemm) {
     std::string eq = "ik,kj";
 
     EXPECT_TRUE(arma::approx_equal(
-      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::parse(eq), A, B),
+      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::Equation::parse(eq), A, B),
       A * B,
       "abstol", 1e-5));
 }
@@ -61,7 +61,7 @@ TEST_F(ContractionTests, hadamard) {
     std::string eq = "ij,ij->ij";
 
     EXPECT_TRUE(arma::approx_equal(
-      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::parse(eq), A, B),
+      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::Equation::parse(eq), A, B),
       A % B,
       "abstol", 1e-5));
 }
@@ -75,7 +75,7 @@ TEST_F(ContractionTests, unitary_transformation) {
     std::string eq = "ji,jk,kl->il";
 
     EXPECT_TRUE(arma::approx_equal(
-      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::parse(eq), R, B, R),
+      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::Equation::parse(eq), R, B, R),
       R.t() * B * R,
       "abstol", 1e-5));
 }
