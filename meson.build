@@ -48,4 +48,5 @@ arma_einsum_dep = declare_dependency(
 
 if get_option('tests')
     subdir('tests')
+    subdir('benchmarks')
 endif

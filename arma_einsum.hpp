@@ -247,7 +247,8 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
     IndicesIterator it(indices_size);
     T accum = 0;
 
-    #pragma omp parallel for reduction(+:accum) default(none) shared(it, seq, compute_product)
+    #pragma omp parallel for reduction(+:accum) if (!omp_in_parallel()) \
+      default(none) shared(it, seq, compute_product)
     for (uint64_t ix = 0; ix < it.total(); ++ix) {
       accum += compute_product(it.convert(ix), seq);
     }
@@ -256,7 +257,8 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   } else if (result_indices.size() == 1) {
     char idx0 = result_indices[0];
 
-    #pragma omp parallel for default(none) shared(seq, compute_product, result, indices_size, idx0)
+    #pragma omp parallel for if (!omp_in_parallel()) \
+      default(none)shared(seq, compute_product, result, indices_size, idx0)
     for (uint64_t irow = 0; irow < indices_size.at(idx0); ++irow) {
       T accum = 0;
       IndicesIterator it(indices_size, {{idx0, irow}});
@@ -270,7 +272,8 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   } else {
     char idx0 = result_indices[0], idx1 = result_indices[1];
 
-    #pragma omp parallel for default(none) shared(seq, compute_product, result, indices_size, idx0, idx1)
+    #pragma omp parallel for collapse(2) if (!omp_in_parallel()) \
+       default(none) shared(seq, compute_product, result, indices_size, idx0, idx1)
     for (uint64_t irow = 0; irow < indices_size.at(idx0); ++irow) {
       for (uint64_t icol = 0; icol < indices_size.at(idx1); ++icol) {
         T accum = 0;
