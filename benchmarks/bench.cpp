@@ -15,8 +15,6 @@ static void BM_etrace(benchmark::State& state) {
     }
 }
 
-BENCHMARK(BM_etrace)->Range(2<<5, 2<<10);
-
 static void BM_atrace(benchmark::State& state) {
     auto A = arma::randn<arma::Mat<BENCH_FLOAT>>(state.range(0), state.range(0));
 
@@ -26,7 +24,30 @@ static void BM_atrace(benchmark::State& state) {
     }
 }
 
+BENCHMARK(BM_etrace)->Range(2<<5, 2<<10);
 BENCHMARK(BM_atrace)->Range(2<<5, 2<<10);
+
+/* -- daxpy */
+static void BM_edaxpy(benchmark::State& state) {
+    auto A = arma::randn<arma::Mat<BENCH_FLOAT>>(state.range(0), state.range(0));
+    auto b = arma::randn<arma::Col<BENCH_FLOAT>>(state.range(0));
+
+    for (auto _ : state) {
+        arma::Mat<BENCH_FLOAT> r = armaeinsum::einsum_mat<BENCH_FLOAT>("ik,k->i", A, b);
+    }
+}
+
+static void BM_adaxpy(benchmark::State& state) {
+    auto A = arma::randn<arma::Mat<BENCH_FLOAT>>(state.range(0), state.range(0));
+    auto b = arma::randn<arma::Col<BENCH_FLOAT>>(state.range(0));
+
+    for (auto _ : state) {
+        arma::Mat<BENCH_FLOAT> r = A * b;
+    }
+}
+
+BENCHMARK(BM_edaxpy)->Range(2<<4, 2<<8);
+BENCHMARK(BM_adaxpy)->Range(2<<4, 2<<8);
 
 /* -- gemm */
 static void BM_egemm(benchmark::State& state) {
@@ -38,7 +59,6 @@ static void BM_egemm(benchmark::State& state) {
     }
 }
 
-BENCHMARK(BM_egemm)->Range(2<<3, 2<<6);
 
 static void BM_agemm(benchmark::State& state) {
     auto A = arma::randn<arma::Mat<BENCH_FLOAT>>(state.range(0), state.range(0));
@@ -49,6 +69,7 @@ static void BM_agemm(benchmark::State& state) {
     }
 }
 
+BENCHMARK(BM_egemm)->Range(2<<3, 2<<6);
 BENCHMARK(BM_agemm)->Range(2<<3, 2<<6);
 
 // Run the benchmark

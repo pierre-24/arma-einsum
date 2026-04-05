@@ -11,9 +11,10 @@ TEST_F(IteratorTests, test_iterator) {
   armaeinsum::IndicesIterator it({{'a', 2}, {'b', 3}, {'c',  2}}, {'a', 'b', 'c'});
   bool set[2][3][2] = {false};
 
-  for (uint64_t i = 0; i < it.max(); i++) {
-    auto r = it.convert(i);
+  while (it.has_next()) {
+    auto r = *it;
     set[r[0]][r[1]][r[2]]  = true;
+    ++it;
   }
 
   for (uint64_t i = 0; i < 2; i++) {
@@ -29,9 +30,10 @@ TEST_F(IteratorTests, test_iterator_with_fixed) {
   armaeinsum::IndicesIterator it({{'a', 2}, {'b', 3}}, {'a', 'b', 'c'}, {{'c', 1}});
   bool set[2][3][2] = {false};
 
-  for (uint64_t i = 0; i < it.max(); i++) {
-    auto r = it.convert(i);
+  while (it.has_next()) {
+    auto r = *it;
     set[r[0]][r[1]][r[2]]  = true;
+    ++it;
   }
 
   for (uint64_t i = 0; i < 2; i++) {
@@ -50,6 +52,7 @@ TEST_F(IteratorTests, test_iterator_with_fixed) {
 TEST_F(IteratorTests, test_iterator_no_loop) {
   armaeinsum::IndicesIterator it({}, {'c'}, {{'c', 1}});
 
-  EXPECT_EQ(it.convert(0), std::vector<uint64_t>({1}));
+  EXPECT_EQ(*it, std::vector<uint64_t>({1}));
   EXPECT_EQ(it.max(), 1);
+  EXPECT_FALSE(it.has_next());
 }

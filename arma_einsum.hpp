@@ -45,33 +45,31 @@ class IndicesIterator {
  private:
   /// Maximal value for each id
   std::vector<uint64_t> _max_per_id;
-  /// Fixed value, will not be iterated
-  std::vector<uint64_t> _fixed_template;
-  /// Active ids, will be iterated
+  /// Current value
+  std::vector<uint64_t> _current_v;
+  /// Active ids
   std::vector<size_t> _active_ids;
-  /// Maximal value for external counter
+
   uint64_t _max_val;
+  uint64_t _current_ix;
 
  public:
   IndicesIterator(
     const multival_t& indices, const std::vector<char>& all_labels, const multival_t& fixed = {})
-    : _max_val(1) {
+    : _max_val(1), _current_ix(0) {
     size_t num_slots = all_labels.size();
-    _max_per_id.resize(num_slots, 1);
-    _fixed_template.resize(num_slots, 0);
+    _max_per_id.assign(num_slots, 1);
+    _current_v.assign(num_slots, 0);
 
-    // Helper to find the "ID" (index) of a label in the master list
     auto get_id = [&](char c) {
       auto it = std::find(all_labels.begin(), all_labels.end(), c);
-      return std::distance(all_labels.begin(), it);
+      return static_cast<size_t>(std::distance(all_labels.begin(), it));
     };
 
-    // 1. Fill fixed values into the template
     for (const auto& [label, val] : fixed) {
-      _fixed_template[get_id(label)] = val;
+      _current_v[get_id(label)] = val;
     }
 
-    // 2. Fill iterating dimensions
     for (const auto& [label, max_dim] : indices) {
       if (!fixed.contains(label)) {
         size_t id = get_id(label);
@@ -81,28 +79,44 @@ class IndicesIterator {
       }
     }
 
-    // Sort active IDs descending for right-to-left odometer math
-    std::sort(_active_ids.rbegin(), _active_ids.rend());
+    std::sort(_active_ids.begin(), _active_ids.end());
   }
 
-  /// Get maximal value of counter
+  /// Accessor: operator* returns the current vector state
+  const std::vector<uint64_t>& operator*() const {
+    return _current_v;
+  }
+
+  /// Increment
+  IndicesIterator& operator++() {  // The "Odometer" step logic
+    _current_ix++;
+    for (size_t id : _active_ids) {
+      _current_v[id]++;
+      if (_current_v[id] < _max_per_id[id]) {
+        return *this;
+      }
+      _current_v[id] = 0;
+    }
+    return *this;
+  }
+
+  /// Boolean check for the while loop
+  [[nodiscard]] bool has_next() const {
+    return _current_ix < _max_val;
+  }
+
   [[nodiscard]] uint64_t max() const { return _max_val; }
 
   /**
-   * Convert `counter` into multi-counter
-   *
-   * @param counter the counter
-   * @return
+   * start_to / jump_to logic: Sets the state for a specific flat index
    */
-  [[nodiscard]] std::vector<uint64_t> convert(uint64_t counter) const {
-    std::vector<uint64_t> result = _fixed_template;
-    uint64_t temp = counter;
-
-    for (const auto& id : _active_ids) {
-      result[id] = temp % _max_per_id[id];
+  void start_to(uint64_t goal_index) {
+    _current_ix = goal_index;
+    uint64_t temp = goal_index;
+    for (size_t id : _active_ids) {
+      _current_v[id] = temp % _max_per_id[id];
       temp /= _max_per_id[id];
     }
-    return result;
   }
 };
 
@@ -279,18 +293,33 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   constexpr auto seq = std::make_index_sequence<sizeof...(Types)>{};
 
   // 5. Evaluate
-  if (result_indices.empty()) {
-    IndicesIterator it(indices_size, all_labels);
-    T accum = 0;
+  if (result_indices.empty()) {  // SCALAR RESULT CASE
+    // We create a global iterator just to get the max() value for partitioning
+    IndicesIterator total_iterator(indices_size, all_labels);
+    uint64_t total_work = total_iterator.max();
+    T total_accum = 0;
 
-#pragma omp parallel for reduction(+:accum) if (!omp_in_parallel()) \
-        default(none) shared(it, seq, compute_product)
-    for (uint64_t ix = 0; ix < it.max(); ++ix) {
-      accum += compute_product(it.convert(ix), seq);
+#pragma omp parallel for reduction(+:total_accum) if (!omp_in_parallel()) \
+        default(none) shared(total_work, all_labels, indices_size, seq, compute_product)
+    for (int chunk = 0; chunk < omp_get_num_threads(); ++chunk) {
+      // Divide work manually
+      int tid = omp_get_thread_num();
+      int n_threads = omp_get_num_threads();
+      uint64_t start = (total_work * tid) / n_threads;
+      uint64_t end = (total_work * (tid + 1)) / n_threads;
+
+      IndicesIterator it(indices_size, all_labels);
+      it.start_to(start);  // O(Rank) jump once per thread
+
+      T local_accum = 0;
+      for (uint64_t i = start; i < end && it.has_next(); ++i) {
+        local_accum += compute_product(*it, seq);
+        ++it;
+      }
+      total_accum = local_accum;
     }
-
-    result.at(0, 0) = accum;
-  } else if (result_indices.size() == 1) {
+    result.at(0, 0) = total_accum;
+  } else if (result_indices.size() == 1) {  // VECTOR RESULT CASE
     char idx0 = result_indices[0];
 
 #pragma omp parallel for if (!omp_in_parallel()) \
@@ -299,13 +328,13 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
       T accum = 0;
       IndicesIterator it(indices_size, all_labels, {{idx0, irow}});
 
-      for (uint64_t ix = 0; ix < it.max(); ++ix) {
-        accum += compute_product(it.convert(ix), seq);
+      while (it.has_next()) {
+        accum += compute_product(*it, seq);
+        ++it;
       }
-
       result.at(irow) = accum;
     }
-  } else {
+  } else {  // MATRIX RESULT CASE
     char idx0 = result_indices[0], idx1 = result_indices[1];
 
 #pragma omp parallel for collapse(2) if (!omp_in_parallel()) \
@@ -315,10 +344,10 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
         T accum = 0;
         IndicesIterator it(indices_size, all_labels, {{idx0, irow}, {idx1, icol}});
 
-        for (uint64_t ix = 0; ix < it.max(); ++ix) {
-          accum += compute_product(it.convert(ix), seq);
+        while (it.has_next()) {
+          accum += compute_product(*it, seq);
+          ++it;
         }
-
         result.at(irow, icol) = accum;
       }
     }
