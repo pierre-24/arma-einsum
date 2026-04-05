@@ -10,6 +10,7 @@
 #include <cassert>
 #include <cstdint>
 #include <map>
+#include <set>
 
 #ifndef ARMA_EINSUM_FORMAT  // use std::format by default
 #include <format>
@@ -42,55 +43,65 @@ using multival_t = std::map<char, uint64_t>;
  */
 class IndicesIterator {
  private:
-  /// list of indices
-  std::vector<char> _indices;
-  /// List of max
-  std::vector<uint64_t> _max_per_index;
-  /// Fixed values, added as is to the result
-  multival_t _fixed_values;
-  /// Internal total, computed as `prod(_max_per_index)`
-  uint64_t _total;
+  /// Maximal value for each id
+  std::vector<uint64_t> _max_per_id;
+  /// Fixed value, will not be iterated
+  std::vector<uint64_t> _fixed_template;
+  /// Active ids, will be iterated
+  std::vector<size_t> _active_ids;
+  /// Maximal value for external counter
+  uint64_t _max_val;
 
  public:
-  IndicesIterator() = delete;
+  IndicesIterator(
+    const multival_t& indices, const std::vector<char>& all_labels, const multival_t& fixed = {})
+    : _max_val(1) {
+    size_t num_slots = all_labels.size();
+    _max_per_id.resize(num_slots, 1);
+    _fixed_template.resize(num_slots, 0);
 
-  /**
-   * Create an iterator
-   *
-   * @param indices list indices and their max value
-   * @param fixed set of extra indices which has a fixed value (added as is to the result)
-   */
-  explicit IndicesIterator(const multival_t& indices, const multival_t& fixed = {})
-  : _fixed_values(fixed), _total(1) {
-    if (indices.empty()) {
-      _total = 1;
-    } else {
-      for (auto& index : indices) {
-        if (!fixed.contains(index.first)) {
-          _indices.push_back(index.first);
-          _max_per_index.push_back(index.second);
-          _total *= index.second;
-        }
+    // Helper to find the "ID" (index) of a label in the master list
+    auto get_id = [&](char c) {
+      auto it = std::find(all_labels.begin(), all_labels.end(), c);
+      return std::distance(all_labels.begin(), it);
+    };
+
+    // 1. Fill fixed values into the template
+    for (const auto& [label, val] : fixed) {
+      _fixed_template[get_id(label)] = val;
+    }
+
+    // 2. Fill iterating dimensions
+    for (const auto& [label, max_dim] : indices) {
+      if (!fixed.contains(label)) {
+        size_t id = get_id(label);
+        _active_ids.push_back(id);
+        _max_per_id[id] = max_dim;
+        _max_val *= max_dim;
       }
     }
+
+    // Sort active IDs descending for right-to-left odometer math
+    std::sort(_active_ids.rbegin(), _active_ids.rend());
   }
 
-  uint64_t total() const { return _total; }
+  /// Get maximal value of counter
+  [[nodiscard]] uint64_t max() const { return _max_val; }
 
-  /// Get current value (with fixed)
-  multival_t convert(uint64_t counter) const {
-    assert(counter < _total);
+  /**
+   * Convert `counter` into multi-counter
+   *
+   * @param counter the counter
+   * @return
+   */
+  [[nodiscard]] std::vector<uint64_t> convert(uint64_t counter) const {
+    std::vector<uint64_t> result = _fixed_template;
+    uint64_t temp = counter;
 
-    multival_t result = _fixed_values;
-    uint64_t last_index = _indices.size() - 1;
-
-    uint64_t i = counter;
-
-    for (uint64_t ri = 0; ri < _indices.size(); ri++) {
-      result[_indices.at(last_index - ri)] = i % _max_per_index.at(last_index - ri);
-      i /= _max_per_index.at(last_index - ri);
+    for (const auto& id : _active_ids) {
+      result[id] = temp % _max_per_id[id];
+      temp /= _max_per_id[id];
     }
-
     return result;
   }
 };
@@ -221,21 +232,45 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   }
   result.zeros();
 
-  // 5. Evaluate
+  // Setup: Create the master label list (schema) and the ID maps
+  std::vector<char> all_labels;
+  std::set<char> unique_labels;
+  for (const auto& labels : _eq) {
+    for (char c : labels) {
+      unique_labels.insert(c);
+    }
+  }
 
-  // Perform multiplication across all operands
-  auto compute_product = [&]<std::size_t... I>(const multival_t& v, std::index_sequence<I...>) -> T {
+  all_labels.assign(unique_labels.begin(), unique_labels.end());
+
+  auto get_id = [&](char c) {
+    auto it = std::find(all_labels.begin(), all_labels.end(), c);
+    return static_cast<size_t>(std::distance(all_labels.begin(), it));
+  };
+
+  // Pre-calculate the integer IDs for every operand
+  std::vector<std::vector<size_t>> op_id_map;
+  for (size_t i = 0; i < sizeof...(Types); ++i) {
+    std::vector<size_t> ids;
+    for (char c : _eq[i]) {
+      ids.push_back(get_id(c));
+    }
+
+    op_id_map.push_back(ids);
+  }
+
+  auto compute_product = [&]<std::size_t... I>(const std::vector<uint64_t>& v, std::index_sequence<I...>) -> T {
     T product = 1;
     ([&](auto idx, const auto& op) {
       using OpType = std::decay_t<decltype(op)>;
-      const auto& labels = _eq[idx];
+      const auto& ids = op_id_map[idx];
 
       if constexpr (arma::is_arma_cube_type<OpType>::value) {
-        product *= op.at(v.at(labels[0]), v.at(labels[1]), v.at(labels[2]));
+        product *= op.at(v[ids[0]], v[ids[1]], v[ids[2]]);
       } else if constexpr (arma::is_Col<OpType>::value || arma::is_Row<OpType>::value) {
-        product *= op.at(v.at(labels[0]));
+        product *= op.at(v[ids[0]]);
       } else {
-        product *= op.at(v.at(labels[0]), v.at(labels[1]));
+        product *= op.at(v[ids[0]], v[ids[1]]);
       }
     }(I, operands), ...);
     return product;
@@ -243,13 +278,14 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
 
   constexpr auto seq = std::make_index_sequence<sizeof...(Types)>{};
 
+  // 5. Evaluate
   if (result_indices.empty()) {
-    IndicesIterator it(indices_size);
+    IndicesIterator it(indices_size, all_labels);
     T accum = 0;
 
-    #pragma omp parallel for reduction(+:accum) if (!omp_in_parallel()) \
-      default(none) shared(it, seq, compute_product)
-    for (uint64_t ix = 0; ix < it.total(); ++ix) {
+#pragma omp parallel for reduction(+:accum) if (!omp_in_parallel()) \
+        default(none) shared(it, seq, compute_product)
+    for (uint64_t ix = 0; ix < it.max(); ++ix) {
       accum += compute_product(it.convert(ix), seq);
     }
 
@@ -257,13 +293,13 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   } else if (result_indices.size() == 1) {
     char idx0 = result_indices[0];
 
-    #pragma omp parallel for if (!omp_in_parallel()) \
-      default(none)shared(seq, compute_product, result, indices_size, idx0)
+#pragma omp parallel for if (!omp_in_parallel()) \
+        default(none) shared(seq, compute_product, result, indices_size, idx0, all_labels, op_id_map)
     for (uint64_t irow = 0; irow < indices_size.at(idx0); ++irow) {
       T accum = 0;
-      IndicesIterator it(indices_size, {{idx0, irow}});
+      IndicesIterator it(indices_size, all_labels, {{idx0, irow}});
 
-      for (uint64_t ix = 0; ix < it.total(); ++ix) {
+      for (uint64_t ix = 0; ix < it.max(); ++ix) {
         accum += compute_product(it.convert(ix), seq);
       }
 
@@ -272,14 +308,14 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   } else {
     char idx0 = result_indices[0], idx1 = result_indices[1];
 
-    #pragma omp parallel for collapse(2) if (!omp_in_parallel()) \
-       default(none) shared(seq, compute_product, result, indices_size, idx0, idx1)
+#pragma omp parallel for collapse(2) if (!omp_in_parallel()) \
+        default(none) shared(seq, compute_product, result, indices_size, idx0, idx1, all_labels, op_id_map)
     for (uint64_t irow = 0; irow < indices_size.at(idx0); ++irow) {
       for (uint64_t icol = 0; icol < indices_size.at(idx1); ++icol) {
         T accum = 0;
-        IndicesIterator it(indices_size, {{idx0, irow}, {idx1, icol}});
+        IndicesIterator it(indices_size, all_labels, {{idx0, irow}, {idx1, icol}});
 
-        for (uint64_t ix = 0; ix < it.total(); ++ix) {
+        for (uint64_t ix = 0; ix < it.max(); ++ix) {
           accum += compute_product(it.convert(ix), seq);
         }
 
