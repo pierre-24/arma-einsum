@@ -13,7 +13,7 @@ It enables expressive tensor-style operations (dot products, traces, contraction
 - No support for:
     - Ellipsis (`...`)
     - Broadcasting (NumPy-style)
-- No [optimization](https://optimized-einsum.readthedocs.io/en/stable/) via the creation of intermediate, so performances are suboptimal.
+- No [optimization](https://optimized-einsum.readthedocs.io/en/stable/) via the creation of intermediate or use of BLAS, **so performances are suboptimal** (about two order of magnitudes slower).
 
 ## Installation
 
@@ -119,7 +119,10 @@ meson setup _build
 meson compile -C _build
 
 # run test suites
-meson test -C _build
+OMP_NUM_THREADS=4 meson test -C _build
+
+# run benchmark
+OMP_NUM_THREADS=4 meson test --benchmark --verbose -C _build
 ```
 
 You can also check linting via [`cpplint`](https://github.com/cpplint/cpplint) using:

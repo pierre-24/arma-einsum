@@ -56,7 +56,19 @@ jobs:
           MESON_NUM_PROCESSES=1
           MESON_TESTTHREADS=1
           meson test
+          --suite lib_code
           --print-errorlogs
+          -C ${{ env.BUILD_DIR }}
+      - name: Run benchmark (with Meson) and OMP_NUM_THREADS != 1
+        run: >-
+          OMP_NUM_THREADS=${{ env.NTHREADS }}
+          MESON_NUM_PROCESSES=1
+          MESON_TESTTHREADS=1
+          meson test
+          --suite lib_code
+          --timeout-multiplier 0
+          --benchmark
+          --verbose
           -C ${{ env.BUILD_DIR }}
       - name: Memcheck (with Meson & Valgdrind & OMP_NUM_THREADS = 1)
         if: ${{ matrix.compiler == 'gcc' }}
@@ -66,6 +78,7 @@ jobs:
           MESON_TESTTHREADS=${{ env.NTHREADS }}
           meson test
           --print-errorlogs
+          --suite lib_code
           --timeout-multiplier 0
           --wrap='valgrind --leak-check=full --error-exitcode=1'
           -C ${{ env.BUILD_DIR }}
