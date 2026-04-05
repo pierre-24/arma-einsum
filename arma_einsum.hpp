@@ -142,10 +142,39 @@ class Equation {
     }
   }
 
-  const std::vector<indices_t>& operands() const  { return _eq; }
+  /// Get operands
+  [[nodiscard]] const std::vector<indices_t>& operands() const  { return _eq; }
 
+  /// Get operand
+  [[nodiscard]] const indices_t& at(uint64_t index) const {
+    return _eq.at(index);
+  }
+
+  /// Give the number of operands (including the resulting one)
   [[nodiscard]] uint64_t n() const { return _eq.size(); }
 
+  /// Give the unique indices
+  [[nodiscard]] std::set<char> unique_indices() const {
+    std::set<char> uniques;
+    for (auto& i : _eq) {
+      for (auto& c : i) {
+        uniques.insert(c);
+      }
+    }
+
+    return uniques;
+  }
+
+  /// Give the length of the equation (i.e., the sum of the size of each operand
+  [[nodiscard]] uint64_t length() const {
+    uint64_t len = 0;
+    for (auto& i : _eq) {
+      len += i.size();
+    }
+    return len;
+  }
+
+  /// pretty-printing
   explicit operator std::string() const {
     std::stringstream ss;
 
@@ -472,7 +501,9 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
   return result;
 }
 
-using path_t = std::vector<std::array<uint64_t, 2>>;
+using step_t = std::array<uint64_t, 2>;
+
+using path_t = std::vector<step_t>;
 
 template <typename T>
 class ContractionEngine {
@@ -484,11 +515,17 @@ class ContractionEngine {
     indices_t labels;
   };
 
+  /// Given `step`, compute the resulting equation
+  static Equation _simplify(const Equation& eq, const step_t& step, const indices_t& result);
+
+  /// Find remaining intermediates after doing the contraction at positions `a` and `b`
+  static indices_t _remaining_intermediate(const Equation& eq, uint64_t a, uint64_t b);
+
  public:
   ContractionEngine() = default;
 
   /// Find a path to evaluate `eq`
-  path_t find_path(const Equation& eq);
+  static path_t find_path(const Equation& eq);
 
   /**
    * Evaluate `eq` by optimizing it when possible
@@ -504,11 +541,63 @@ class ContractionEngine {
 };
 
 template <typename T>
+Equation ContractionEngine<T>::_simplify(const Equation& eq, const step_t& step, const indices_t& result) {
+  std::vector<indices_t> operands;
+  operands.assign(eq.operands().begin(), eq.operands().end());
+
+  operands.erase(operands.begin() + static_cast<int64_t>(step[0]));
+  operands.at(step[1] - 1) = result;
+
+  return Equation(operands);
+}
+
+template <typename T>
+indices_t ContractionEngine<T>::_remaining_intermediate(const Equation& eq, uint64_t a, uint64_t b) {
+  // check which indices are required (they cannot be removed)
+  std::set<char> required;
+  for (const auto& c : eq.operands().back()) {
+    required.insert(c);
+  }
+
+  for (uint64_t iop = 0; iop < eq.n() - 1; ++iop) {
+    if (iop != a && iop != b) {
+      for (const auto& c : eq.at(iop)) {
+        required.insert(c);
+      }
+    }
+  }
+
+  // Build the intermediate set
+  indices_t intermediate;
+  std::set<char> seen;  // To avoid duplicates (e.g., Hadamard indices)
+
+  auto add_if_required = [&](const indices_t& indices) {
+    for (char c : indices) {
+      if (required.contains(c) && !seen.contains(c)) {
+        intermediate.push_back(c);
+        seen.insert(c);
+      }
+    }
+  };
+
+  add_if_required(eq.at(a));
+  add_if_required(eq.at(b));
+
+  return intermediate;
+}
+
+template <typename T>
 path_t ContractionEngine<T>::find_path(const Equation& eq) {
   path_t result;
 
-  std::vector<indices_t> stack;
-  stack.assign(eq.operands().begin(), eq.operands().end() - 1);
+  if (eq.n() > 2) {
+    auto intermediates = _remaining_intermediate(eq, 0, 1);
+    step_t step = {0, 1};
+    auto transformation = Equation({eq.at(0), eq.at(1), intermediates});
+    std::cout << std::string(eq)
+              << " & " << std::string(transformation)
+              << " = " << std::string(_simplify(eq, step, transformation.operands().back())) << std::endl;
+  }
 
   return result;
 }
@@ -529,6 +618,7 @@ arma::Mat<T> ContractionEngine<T>::evaluate_mat(const Equation& eq, const Types&
 
   if (stack.size() > 1) {
     std::cout << "need to work" << std::endl;
+    auto path = find_path(eq);
   }
 
   auto final_operand = eq.operands().back();
