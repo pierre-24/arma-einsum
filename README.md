@@ -45,11 +45,15 @@ If you want to use a Meson wrap file instead, check [the example](example-meson)
 
 ```cpp
 armaeinsum::einsum_mat<T>("equation", operand1, operand2, ...);
+armaeinsum::einsum_mat_opt<T>(level, "equation", operand1, operand2, ...);
 ```
+
+The latter will be faster, but might generate intermediate results.
 
 ### Parameters
 
 - **`T`**: Any floating point type supported by Armadillo (mixing types is not supported).
+- **`level`**: level of optimization for the path, for the moment only `armaeinsum::Greedy` is available.
 - **`equation`**: A string describing the Einstein summation (see below).
 - **`operands`**: A variadic list of Armadillo objects:
     - `arma::Col`

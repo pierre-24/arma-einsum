@@ -10,7 +10,7 @@ static void BM_etrace(benchmark::State& state) {
     auto A = arma::randn<arma::Mat<BENCH_FLOAT>>(state.range(0), state.range(0));
 
     for (auto _ : state) {
-        BENCH_FLOAT r = armaeinsum::einsum_mat<BENCH_FLOAT>("ii->", A).at(0, 0);
+        BENCH_FLOAT r = armaeinsum::einsum_mat_opt<BENCH_FLOAT>(armaeinsum::Greedy, "ii", A).at(0, 0);
         benchmark::DoNotOptimize(r);
     }
 }
@@ -33,7 +33,7 @@ static void BM_edaxpy(benchmark::State& state) {
     auto b = arma::randn<arma::Col<BENCH_FLOAT>>(state.range(0));
 
     for (auto _ : state) {
-        arma::Mat<BENCH_FLOAT> r = armaeinsum::einsum_mat<BENCH_FLOAT>("ik,k->i", A, b);
+        arma::Mat<BENCH_FLOAT> r = armaeinsum::einsum_mat_opt<BENCH_FLOAT>(armaeinsum::Greedy, "ik,k->i", A, b);
     }
 }
 
@@ -55,7 +55,7 @@ static void BM_egemm(benchmark::State& state) {
     auto B = arma::randn<arma::Mat<BENCH_FLOAT>>(state.range(0), state.range(0));
 
     for (auto _ : state) {
-        arma::Mat<BENCH_FLOAT> r = armaeinsum::einsum_mat<BENCH_FLOAT>("ik,kj->ij", A, B);
+        arma::Mat<BENCH_FLOAT> r = armaeinsum::einsum_mat_opt<BENCH_FLOAT>(armaeinsum::Greedy, "ik,kj->ij", A, B);
     }
 }
 

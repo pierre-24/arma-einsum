@@ -513,6 +513,11 @@ using step_t = std::array<uint64_t, 2>;
 
 using path_t = std::vector<step_t>;
 
+/// Method to find optimal path
+enum Optimization {
+  Greedy,
+};
+
 template <typename T>
 class ContractionEngine {
  private:
@@ -546,12 +551,13 @@ class ContractionEngine {
    *
    * @tparam T a floating-point type
    * @tparam Types Armadillo objects
+   * @param level level to find optimal path (may generate intermediates)
    * @param eq an equation
    * @param operands Armadillo objects
    * @return a matrix with the evaluated result
    */
   template <ArmadilloType... Types>
-  arma::Mat<T> evaluate_mat(const Equation& eq, const Types&... operands) const;
+  arma::Mat<T> evaluate_mat(const Optimization& level, const Equation& eq, const Types&... operands) const;
 };
 
 template <typename T>
@@ -724,7 +730,8 @@ path_t ContractionEngine<T>::find_path_greedy(const Equation& eq) {
 
 template <typename T>
 template <ArmadilloType ... Types>
-arma::Mat<T> ContractionEngine<T>::evaluate_mat(const Equation& eq, const Types&... operands) const {
+arma::Mat<T> ContractionEngine<T>::evaluate_mat(
+const Optimization& level, const Equation& eq, const Types&... operands) const {
   // Unpack variadic operands into a stack using an index sequence
   std::vector<Operand> stack;
   stack.reserve(sizeof...(Types));
@@ -761,9 +768,37 @@ arma::Mat<T> ContractionEngine<T>::evaluate_mat(const Equation& eq, const Types&
   return _evaluate_final(stack[0], ceq);
 }
 
+/**
+ * Evaluate an Einstein summation
+ *
+ * @warning result must be representable as a `arma::Mat<T>`
+ *
+ * @tparam T floating point type
+ * @tparam Types Armadillo types
+ * @param equation an equation
+ * @param operands Armadillo objects
+ * @return Result, as a matrix
+ */
 template <typename T, ArmadilloType... Types>
 arma::Mat<T> einsum_mat(const std::string& equation, const Types&... operands) {
   return Equation::parse(equation).evaluate_mat<T>(operands...);
+}
+
+/**
+ * Evaluate an Einstein summation, using an optimized path
+ *
+ * @warning result must be representable as a `arma::Mat<T>`
+ *
+ * @tparam T floating point type
+ * @tparam Types Armadillo types
+ * @param level level of optimization for the path
+ * @param equation an equation
+ * @param operands Armadillo objects
+ * @return Result, as a matrix
+ */
+template <typename T, ArmadilloType... Types>
+arma::Mat<T> einsum_mat_opt(const Optimization& level, const std::string& equation, const Types&... operands) {
+  return ContractionEngine<T>().evaluate_mat(level, Equation::parse(equation), operands...);
 }
 
 }  // namespace armaeinsum
