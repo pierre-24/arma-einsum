@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <map>
 #include <set>
+#include <list>
 
 #ifndef ARMA_EINSUM_FORMAT  // use std::format by default
 #include <format>
@@ -769,43 +770,38 @@ path_t ContractionEngine<T>::find_path_greedy(const Equation& eq) {
 }
 
 template <typename T>
-template <ArmadilloType ... Types>
+template <ArmadilloType... Types>
 arma::Mat<T> ContractionEngine<T>::evaluate_mat(
 const Optimization& level, const Equation& eq, const Types&... operands) const {
-  // Unpack variadic operands into a stack using an index sequence
-  std::vector<Operand> stack;
-  stack.reserve(sizeof...(Types));
-  auto unpack = [&]<std::size_t... I>(std::index_sequence<I...>) {
-    ([&](auto idx, const auto& op) {
-        stack.push_back({op, eq.operands()[idx]});
-    }(I, operands), ...);
-  };  // NOLINT
+  // 1. Direct Unpack into std::list
+  std::list<Operand> stack;
+  size_t op_idx = 0;
+  ([&](const auto& op) { stack.push_back({op, eq.operands()[op_idx++]}); }(operands), ...);
 
-  unpack(std::make_index_sequence<sizeof...(Types)>{});
+  // 2. Contraction if needed
+  Equation current_eq = eq;
+  if (current_eq.n() > 2) {
+    path_t path = find_path_greedy(current_eq);
 
-  // use a sequence of transformations
-  auto ceq = eq;
-  if (ceq.n() > 2) {
-    for (auto& step : find_path_greedy(eq)) {
-#ifdef ARMA_EINSUM_DEBUG
-      std::cout << std::string(ceq);
-#endif
-      auto intermediates = _remaining_intermediate(ceq, step);
-      auto transformation = Equation({ceq.at(step[0]), ceq.at(step[1]), intermediates});
+    for (const auto& step : path) {
+      auto itA = std::next(stack.begin(), static_cast<ssize_t>(step[0]));
+      auto itB = std::next(stack.begin(), static_cast<ssize_t>(step[1]));
 
-      auto opA = std::move(stack[step[0]]);
-      auto opB = std::move(stack[step[1]]);
+      // Calculate intermediate labels
+      indices_t inter = _remaining_intermediate(current_eq, step);
 
-      stack.erase(stack.begin() + static_cast<int64_t>(step[0]));
+      // Construct & evaluate the transformation equation for this pair
+      Equation transformation({itA->labels, itB->labels, inter});
+      Operand result = _evaluate_pair(*itA, *itB, transformation);
 
-      stack[step[1] - 1] = _evaluate_pair(opA, opB, transformation);
-
-      ceq = _simplify(ceq, step, transformation.operands().back());
+      // update
+      stack.erase(itA);
+      *itB = std::move(result);
+      current_eq = _simplify(current_eq, step, inter);
     }
   }
 
-  // final transformation to get the result
-  return _evaluate_final(stack[0], ceq);
+  return _evaluate_final(stack.front(), current_eq);
 }
 
 /**
