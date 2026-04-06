@@ -522,12 +522,37 @@ enum Optimization {
 template <typename T>
 class ContractionEngine {
  private:
+  using RowRef = std::reference_wrapper<const arma::Row<T>>;
+  using ColRef = std::reference_wrapper<const arma::Col<T>>;
+  using MatRef = std::reference_wrapper<const arma::Mat<T>>;
+  using CubeRef = std::reference_wrapper<const arma::Cube<T>>;
+
   struct Operand {
-    /// Variant to hold intermediates (Mat or Cube)
-    std::variant<arma::Mat<T>, arma::Cube<T>> data;
+    /// Variant to hold intermediates (Mat or Cube, or reference to it)
+    std::variant<arma::Mat<T>, arma::Cube<T>, ColRef, RowRef, MatRef, CubeRef> data;
     /// Associated labels
     indices_t labels;
   };
+
+  static const arma::Mat<T>& _as_mat(const Operand& op) {
+    if (std::holds_alternative<MatRef>(op.data)) {
+      return std::get<MatRef>(op.data).get();
+    } else if (std::holds_alternative<RowRef>(op.data)) {
+      return std::get<RowRef>(op.data).get();
+    } else if (std::holds_alternative<ColRef>(op.data)) {
+      return std::get<ColRef>(op.data).get();
+    } else {
+      return std::get<arma::Mat<T>>(op.data);
+    }
+  }
+
+  static const arma::Cube<T>& _as_cube(const Operand& op) {
+    if (std::holds_alternative<CubeRef>(op.data)) {
+      return std::get<CubeRef>(op.data).get();
+    } else {
+      return std::get<arma::Cube<T>>(op.data);
+    }
+  }
 
   /// Given `step`, compute the resulting equation
   static Equation _simplify(const Equation& eq, const step_t& step, const indices_t& result);
@@ -626,7 +651,7 @@ const Operand& a, const Operand& b, const Equation& transformation) {
 #endif
     return {
       arma::Mat<T>(
-        1, 1, arma::fill::value(arma::dot(std::get<arma::Mat<T>>(a.data), std::get<arma::Mat<T>>(b.data)))),
+        1, 1, arma::fill::value(arma::dot(_as_mat(a), _as_mat(b)))),
       iR};
   } else if (
     iA.size() == 1 && iB.size() == 1 && iR.size() == 2
@@ -634,65 +659,65 @@ const Operand& a, const Operand& b, const Equation& transformation) {
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use outer" << std::endl;
 #endif
-    return {std::get<arma::Mat<T>>(a.data) * std::get<arma::Mat<T>>(b.data).t(), iR};
+    return {_as_mat(a) * _as_mat(b).t(), iR};
   } else if (iA.size() == 2 && iB.size() == 1 && iA.at(1) == iB.at(0) && iR.at(0) == iA.at(0)) {  // ij,j->i
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use AXPY" << std::endl;
 #endif
-    return {std::get<arma::Mat<T>>(a.data) * std::get<arma::Mat<T>>(b.data), iR};
+    return {_as_mat(a) * _as_mat(b), iR};
   } else if (iA.size() == 2 && iB.size() == 1 && iA.at(0) == iB.at(0) && iR.at(0) == iA.at(1)) {  // ji,j->i
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use AXPY" << std::endl;
 #endif
-    return {std::get<arma::Mat<T>>(a.data).t() * std::get<arma::Mat<T>>(b.data), iR};
+    return {_as_mat(a).t() * _as_mat(b), iR};
   } else if (iA.size() == 1 && iB.size() == 2 && iA.at(0) == iB.at(1) && iR.at(0) == iB.at(0)) {  // j,ij->i
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use AXPY" << std::endl;
 #endif
-    return {std::get<arma::Mat<T>>(b.data) * std::get<arma::Mat<T>>(a.data), iR};
+    return {_as_mat(b) * _as_mat(a), iR};
   } else if (iA.size() == 1 && iB.size() == 2 && iA.at(0) == iB.at(0) && iR.at(0) == iB.at(1)) {  // i,ij->j
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use AXPY" << std::endl;
 #endif
-    return {std::get<arma::Mat<T>>(b.data).t() * std::get<arma::Mat<T>>(a.data), iR};
+    return {_as_mat(b).t() * _as_mat(a), iR};
   } else if (iA.size() == 2 && iA == iB && iB == iR) {  // ij,ij->ij
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use Hadamard" << std::endl;
 #endif
-    return {std::get<arma::Mat<T>>(a.data) % std::get<arma::Mat<T>>(b.data), iR};
+    return {_as_mat(a) % _as_mat(b), iR};
   } else if (
     iA.size() == 2 && iB.size() == 2
     && iA.at(1) == iB.at(0) && iR.at(0) == iA.at(0) && iR.at(1) == iB.at(1)) {  // ik,kj->ij
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use GEMM" << std::endl;
 #endif
-    return {std::get<arma::Mat<T>>(a.data) * std::get<arma::Mat<T>>(b.data), iR};
+    return {_as_mat(a) * _as_mat(b), iR};
   } else if (
     iA.size() == 2 && iB.size() == 2
     && iA.at(0) == iB.at(0) && iR.at(0) == iA.at(1) && iR.at(1) == iB.at(1)) {  // ki,kj->ij
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use GEMM" << std::endl;
 #endif
-    return {std::get<arma::Mat<T>>(a.data).t() * std::get<arma::Mat<T>>(b.data), iR};
+    return {_as_mat(a).t() * _as_mat(b), iR};
   } else if (
     iA.size() == 2 && iB.size() == 2
     && iA.at(0) == iB.at(0) && iR.at(0) == iA.at(1) && iR.at(1) == iB.at(1)) {  // ki,kj->ij
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use GEMM" << std::endl;
 #endif
-    return {std::get<arma::Mat<T>>(a.data).t() * std::get<arma::Mat<T>>(b.data), iR};
+    return {_as_mat(a).t() * _as_mat(b), iR};
   } else if (
     iA.size() == 2 && iB.size() == 2
     && iA.at(1) == iB.at(1) && iR.at(0) == iA.at(0) && iR.at(1) == iB.at(0)) {  // ik,jk->ij
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use GEMM" << std::endl;
 #endif
-    return {std::get<arma::Mat<T>>(a.data) * std::get<arma::Mat<T>>(b.data).t(), iR};
+    return {_as_mat(a) * _as_mat(b).t(), iR};
   } else {
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use evaluate_mat" << std::endl;
 #endif
-    return {transformation.evaluate_mat<T>(std::get<arma::Mat<T>>(a.data), std::get<arma::Mat<T>>(b.data)), iR};
+    return {transformation.evaluate_mat<T>(_as_mat(a), _as_mat(b)), iR};
   }
 }
 
@@ -712,22 +737,22 @@ const Operand& a, const Equation& transformation) {
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use trace" << std::endl;
 #endif
-    return arma::Mat<T>(1, 1, arma::fill::value(arma::trace(std::get<arma::Mat<T>>(a.data))));
+    return arma::Mat<T>(1, 1, arma::fill::value(arma::trace(_as_mat(a))));
   } else if (iA.size() > 0 && iR.size() == 0) {  // i-> or ij->
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use contraction" << std::endl;
 #endif
-    return arma::Mat<T>(1, 1, arma::fill::value(arma::accu(std::get<arma::Mat<T>>(a.data))));
+    return arma::Mat<T>(1, 1, arma::fill::value(arma::accu(_as_mat(a))));
   } else if (iA.size() == 2 && iR.size() == 2 && iA.at(0) == iR.at(1) && iA.at(1) == iR.at(0)) {  // ij->ji
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use transpose" << std::endl;
 #endif
-    return arma::Mat<T>(std::get<arma::Mat<T>>(a.data).t());
+    return arma::Mat<T>(_as_mat(a).t());
   } else {
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use direct" << std::endl;
 #endif
-    return std::get<arma::Mat<T>>(a.data);
+    return _as_mat(a);
   }
 }
 
@@ -776,7 +801,10 @@ const Optimization& level, const Equation& eq, const Types&... operands) const {
   // 1. Direct Unpack into std::list
   std::list<Operand> stack;
   size_t op_idx = 0;
-  ([&](const auto& op) { stack.push_back({op, eq.operands()[op_idx++]}); }(operands), ...);
+  ([&](const auto& op) {
+    Operand opx = {std::cref(op), eq.operands()[op_idx++]};
+    stack.push_back(opx);
+  }(operands), ...);
 
   // 2. Contraction if needed
   Equation current_eq = eq;
