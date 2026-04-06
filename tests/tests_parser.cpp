@@ -20,6 +20,10 @@ TEST_F(ParserTests, SimpleTest) {
   eq = armaeinsum::Equation::parse("ij");
   EXPECT_EQ("ij->ij", std::string(eq));
 
+  // transpose (automatic with reordering)
+  eq = armaeinsum::Equation::parse("ji");
+  EXPECT_EQ("ji->ij", std::string(eq));
+
   // sum
   eq = armaeinsum::Equation::parse("ij->");
   EXPECT_EQ("ij->", std::string(eq));

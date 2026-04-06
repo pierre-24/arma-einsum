@@ -301,7 +301,7 @@ Equation Equation::parse(const std::string& equation) {
     return Equation(eq);
   }
 
-  // if not, use non-repeated indices in order
+  // if not, use non-repeated indices in alphabetical order
   indices_t nri;
   for (auto& operand : eq) {
     for (const auto& c : operand) {
@@ -318,6 +318,7 @@ Equation Equation::parse(const std::string& equation) {
       i, ARMA_EINSUM_FORMAT("too many indices ({}) in result, armadillo only can go up to 3", nri.size()));
   }
 
+  std::sort(nri.begin(), nri.end());
   eq.push_back(nri);
 
   return Equation(eq);

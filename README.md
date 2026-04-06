@@ -66,7 +66,7 @@ The latter will be faster, but might generate intermediate results.
 The equation string follows standard Einstein summation notation:
 
 ```
-"indices[,indices...] [-> output_indices]"
+"indices[,indices...][->output_indices]"
 ```
 
 ### Rules
@@ -81,7 +81,7 @@ The equation string follows standard Einstein summation notation:
   ```
   "ij,jk->ik"
   ```
-- If `->` is omitted, output indices are inferred automatically.
+- If `->` is omitted, output indices are inferred automatically, in alphabetical order (thus `"ji"` is `"ji->ij""`).
 - **The output must be representable as a `arma::Mat<T>`**.
 
 ## Examples
