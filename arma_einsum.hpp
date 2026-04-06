@@ -1,6 +1,7 @@
 #ifndef ARMA_EINSUM_HPP_
 #define ARMA_EINSUM_HPP_
 
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -11,6 +12,7 @@
 #include <cstdint>
 #include <map>
 #include <set>
+#include <list>
 
 #ifndef ARMA_EINSUM_FORMAT  // use std::format by default
 #include <format>
@@ -123,14 +125,21 @@ class IndicesIterator {
 using indices_t = std::vector<char>;
 
 /**
- * Equation
+ * Equation, hold the sets of indices (as `_operands`).
+ * This object is immutable.
  */
 class Equation {
  private:
   std::vector<indices_t> _eq;
 
+  /// Parse the indices starting at `position` in `input`
+  static indices_t _parse_indices(const std::string& input, uint64_t& position);
+
  public:
-  Equation();
+  Equation() = default;
+  Equation(const Equation& o) = default;
+  Equation(Equation&&) = default;
+  Equation& operator=(const Equation&) = default;
 
   explicit Equation(const std::vector<indices_t>& indices): _eq(indices) {
     if (indices.size() < 2) {
@@ -138,8 +147,39 @@ class Equation {
     }
   }
 
+  /// Get operands
+  [[nodiscard]] const std::vector<indices_t>& operands() const  { return _eq; }
+
+  /// Get a given operand
+  [[nodiscard]] const indices_t& at(uint64_t index) const {
+    return _eq.at(index);
+  }
+
+  /// Give the number of operands (including the resulting one)
   [[nodiscard]] uint64_t n() const { return _eq.size(); }
 
+  /// Give the unique indices
+  [[nodiscard]] std::set<char> unique_indices() const {
+    std::set<char> uniques;
+    for (auto& i : _eq) {
+      for (auto& c : i) {
+        uniques.insert(c);
+      }
+    }
+
+    return uniques;
+  }
+
+  /// Give the length of the equation (i.e., the sum of the size of each operand
+  [[nodiscard]] uint64_t length() const {
+    uint64_t len = 0;
+    for (auto& i : _eq) {
+      len += i.size();
+    }
+    return len;
+  }
+
+  /// pretty-printing
   explicit operator std::string() const {
     std::stringstream ss;
 
@@ -170,11 +210,122 @@ class Equation {
    * @param operands operands, must match `n()`
    * @return a matrix defined by the equation
    */
-  template <typename T, ArmadilloType... Types> arma::Mat<T> evaluate_mat(const Types&... operands);
+  template <typename T, ArmadilloType... Types> arma::Mat<T> evaluate_mat(const Types&... operands) const;
+
+
+  /**
+   * Parse a given equation:
+   *
+   * EQUATION := INDICES (',' INDICES)* ('->' INDICES)?
+   * INDICES := [a-zA-Z]{0,3}
+   *
+   * @param equation the equation
+   * @return a valid `Equation` if `equation` is a valid string
+   */
+  static Equation parse(const std::string& equation);
 };
 
+/// Parse indices
+indices_t Equation::_parse_indices(const std::string& input, uint64_t& position) {
+  if (position >= input.length()) {
+    throw ParserError(position, "expected indices, got EOS");
+  }
+
+  if (!isalpha(input[position])) {
+    throw ParserError(position, "expected a letter for indices");
+  }
+
+  indices_t indices;
+  while (position < input.length() && isalpha(input[position])) {
+    indices.push_back(input[position]);
+    position++;
+  }
+
+  if (indices.empty()) {
+    throw ParserError(position, "expected at least one index");
+  }
+
+  if (indices.size() > 3) {
+    throw ParserError(
+      position, ARMA_EINSUM_FORMAT("too many indices ({}), armadillo only can go up to 3", indices.size()));
+  }
+
+  return indices;
+}
+
+Equation Equation::parse(const std::string& equation) {
+  if (equation.empty()) {
+    throw ParserError(0, "empty equation");
+  }
+
+  uint64_t i = 0;
+
+  // parse operands
+  std::vector<indices_t> eq;
+  while (i < equation.length()) {
+    if (isalpha(equation[i])) {
+      eq.push_back(_parse_indices(equation, i));
+    } else if (equation[i] == ',') {
+      i++;
+    } else if (equation[i] == '-') {
+      break;
+    } else {
+      throw ParserError(i, "unexpected character");
+    }
+  }
+
+  if (eq.empty()) {
+    throw ParserError(i, "expected at least one operand");
+  }
+
+  // parse result if any
+  if (equation[i] == '-') {
+    i++;
+    if (equation[i] != '>') {
+      throw ParserError(i, "expected '>'");
+    }
+    i++;
+
+    if (i == equation.length()) {  // result is a single number
+      eq.push_back(indices_t());
+      return Equation(eq);
+    }
+
+    // there are indices for result
+    eq.push_back(_parse_indices(equation, i));
+
+    if (i != equation.length()) {
+      throw ParserError(i, "expected EOS, but the string is longer");
+    }
+
+    return Equation(eq);
+  }
+
+  // if not, use non-repeated indices in alphabetical order
+  indices_t nri;
+  for (auto& operand : eq) {
+    for (const auto& c : operand) {
+      if (auto position = std::find(nri.begin(), nri.end(), c); position != nri.end()) {
+        nri.erase(position);
+      } else {
+        nri.push_back(c);
+      }
+    }
+  }
+
+  if (nri.size() > 3) {
+    throw ParserError(
+      i, ARMA_EINSUM_FORMAT("too many indices ({}) in result, armadillo only can go up to 3", nri.size()));
+  }
+
+  std::sort(nri.begin(), nri.end());
+  eq.push_back(nri);
+
+  return Equation(eq);
+}
+
 template <typename T, ArmadilloType... Types>
-arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
+arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
   // 1. Basic validation of result dimensionality
   const auto& result_indices = _eq.back();
   if (result_indices.size() > 2) {
@@ -199,6 +350,8 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
       if constexpr (arma::is_arma_cube_type<OpType>::value) {
         actual_rank = 3;
       } else if constexpr (arma::is_Col<OpType>::value || arma::is_Row<OpType>::value) {
+        actual_rank = 1;
+      } else if (op.n_rows == 1 || op.n_cols == 1) {
         actual_rank = 1;
       } else {
         actual_rank = 2;  // Standard Mat
@@ -283,6 +436,8 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
         product *= op.at(v[ids[0]], v[ids[1]], v[ids[2]]);
       } else if constexpr (arma::is_Col<OpType>::value || arma::is_Row<OpType>::value) {
         product *= op.at(v[ids[0]]);
+      } else if (op.n_rows == 1 || op.n_cols == 1) {
+        product *= op.at(v[ids[0]]);
       } else {
         product *= op.at(v[ids[0]], v[ids[1]]);
       }
@@ -356,115 +511,396 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) {
   return result;
 }
 
-inline indices_t _parse_indices(const std::string& input, uint64_t& position) {
-  if (position >= input.length()) {
-    throw ParserError(position, "expected indices, got EOS");
+using step_t = std::array<uint64_t, 2>;
+
+using path_t = std::vector<step_t>;
+
+/// Method to find optimal path
+enum Optimization {
+  Greedy,
+};
+
+template <typename T>
+class ContractionEngine {
+ private:
+  using RowRef = std::reference_wrapper<const arma::Row<T>>;
+  using ColRef = std::reference_wrapper<const arma::Col<T>>;
+  using MatRef = std::reference_wrapper<const arma::Mat<T>>;
+  using CubeRef = std::reference_wrapper<const arma::Cube<T>>;
+
+  struct Operand {
+    /// Variant to hold intermediates (Mat or Cube, or reference to it)
+    std::variant<arma::Mat<T>, arma::Cube<T>, ColRef, RowRef, MatRef, CubeRef> data;
+    /// Associated labels
+    indices_t labels;
+  };
+
+  static const arma::Mat<T>& _as_mat(const Operand& op) {
+    if (std::holds_alternative<MatRef>(op.data)) {
+      return std::get<MatRef>(op.data).get();
+    } else if (std::holds_alternative<RowRef>(op.data)) {
+      return std::get<RowRef>(op.data).get();
+    } else if (std::holds_alternative<ColRef>(op.data)) {
+      return std::get<ColRef>(op.data).get();
+    } else {
+      return std::get<arma::Mat<T>>(op.data);
+    }
   }
 
-  if (!isalpha(input[position])) {
-    throw ParserError(position, "expected a letter for indices");
+  static const arma::Cube<T>& _as_cube(const Operand& op) {
+    if (std::holds_alternative<CubeRef>(op.data)) {
+      return std::get<CubeRef>(op.data).get();
+    } else {
+      return std::get<arma::Cube<T>>(op.data);
+    }
   }
 
-  indices_t indices;
-  while (position < input.length() && isalpha(input[position])) {
-    indices.push_back(input[position]);
-    position++;
-  }
+  /// Given `step`, compute the resulting equation
+  static Equation _simplify(const Equation& eq, const step_t& step, const indices_t& result);
 
-  if (indices.empty()) {
-    throw ParserError(position, "expected at least one index");
-  }
+  /// Find remaining intermediates after doing the contraction at positions `a` and `b`
+  static indices_t _remaining_intermediate(const Equation& eq, const step_t& step);
 
-  if (indices.size() > 3) {
-    throw ParserError(
-      position, ARMA_EINSUM_FORMAT("too many indices ({}), armadillo only can go up to 3", indices.size()));
-  }
+  /// Evaluate contraction between a pair of operands, using `transformation`.
+  /// Attempt to use Armadillo function when possible, fall back to `transformation.evaluate_mat` if not.
+  static Operand _evaluate_pair(const Operand& a, const Operand& b, const Equation& transformation);
 
-  return indices;
+  static arma::Mat<T> _evaluate_final(const Operand& a, const Equation& transformation);
+
+ public:
+  ContractionEngine() = default;
+
+  /// Find a path to evaluate `eq`, using the "greedy" algorithm (use best contraction at each step)
+  static path_t find_path_greedy(const Equation& eq);
+
+  /**
+   * Evaluate `eq` by optimizing it when possible
+   *
+   * @tparam T a floating-point type
+   * @tparam Types Armadillo objects
+   * @param level level to find optimal path (may generate intermediates)
+   * @param eq an equation
+   * @param operands Armadillo objects
+   * @return a matrix with the evaluated result
+   */
+  template <ArmadilloType... Types>
+  arma::Mat<T> evaluate_mat(const Optimization& level, const Equation& eq, const Types&... operands) const;
+};
+
+template <typename T>
+Equation ContractionEngine<T>::_simplify(const Equation& eq, const step_t& step, const indices_t& result) {
+  std::vector<indices_t> operands;
+  operands.assign(eq.operands().begin(), eq.operands().end());
+
+  operands.erase(operands.begin() + static_cast<int64_t>(step[0]));
+  operands.at(step[1] - 1) = result;
+
+  return Equation(operands);
 }
 
-/**
- * Parse a given equation:
- *
- * EQUATION := INDICES (',' INDICES)* ('->' INDICES)?
- * INDICES := [a-zA-Z]{0,3}
- *
- * @param equation the equation
- * @return a valid `Equation` if `equation` is a valid string
- */
-inline Equation parse(const std::string& equation) {
-  if (equation.empty()) {
-    throw ParserError(0, "empty equation");
+template <typename T>
+indices_t ContractionEngine<T>::_remaining_intermediate(const Equation& eq, const step_t& step) {
+  // check which indices are required (they cannot be removed)
+  std::set<char> required;
+  for (const auto& c : eq.operands().back()) {
+    required.insert(c);
   }
 
-  uint64_t i = 0;
-
-  // parse operands
-  std::vector<indices_t> eq;
-  while (i < equation.length()) {
-    if (isalpha(equation[i])) {
-      eq.push_back(_parse_indices(equation, i));
-    } else if (equation[i] == ',') {
-      i++;
-    } else if (equation[i] == '-') {
-      break;
-    } else {
-      throw ParserError(i, "unexpected character");
-    }
-  }
-
-  if (eq.empty()) {
-    throw ParserError(i, "expected at least one operand");
-  }
-
-  // parse result if any
-  if (equation[i] == '-') {
-    i++;
-    if (equation[i] != '>') {
-      throw ParserError(i, "expected '>'");
-    }
-    i++;
-
-    if (i == equation.length()) {  // result is a single number
-      eq.push_back(indices_t());
-      return Equation(eq);
-    }
-
-    // there are indices for result
-    eq.push_back(_parse_indices(equation, i));
-
-    if (i != equation.length()) {
-      throw ParserError(i, "expected EOS, but the string is longer");
-    }
-
-    return Equation(eq);
-  }
-
-  // if not, use non-repeated indices in order
-  indices_t nri;
-  for (auto& operand : eq) {
-    for (const auto& c : operand) {
-      if (auto position = std::find(nri.begin(), nri.end(), c); position != nri.end()) {
-        nri.erase(position);
-      } else {
-        nri.push_back(c);
+  for (uint64_t iop = 0; iop < eq.n() - 1; ++iop) {
+    if (iop != step[0] && iop != step[1]) {
+      for (const auto& c : eq.at(iop)) {
+        required.insert(c);
       }
     }
   }
 
-  if (nri.size() > 3) {
-    throw ParserError(
-      i, ARMA_EINSUM_FORMAT("too many indices ({}) in result, armadillo only can go up to 3", nri.size()));
-  }
+  // Build the intermediate set
+  indices_t intermediate;
+  std::set<char> seen;  // To avoid duplicates (e.g., Hadamard indices)
 
-  eq.push_back(nri);
+  auto add_if_required = [&](const indices_t& indices) {
+    for (char c : indices) {
+      if (required.contains(c) && !seen.contains(c)) {
+        intermediate.push_back(c);
+        seen.insert(c);
+      }
+    }
+  };
 
-  return Equation(eq);
+  add_if_required(eq.at(step[0]));
+  add_if_required(eq.at(step[1]));
+
+  return intermediate;
 }
 
+template <typename T>
+typename ContractionEngine<T>::Operand ContractionEngine<T>::_evaluate_pair(
+const Operand& a, const Operand& b, const Equation& transformation) {
+  assert(transformation.n() == 3);
+
+  auto iA = transformation.at(0);
+  auto iB = transformation.at(1);
+  auto iR = transformation.at(2);
+
+#ifdef ARMA_EINSUM_DEBUG
+  std::cout << " && " << std::string(transformation) << std::endl;
+#endif
+
+  if (iA.size() == 1 && iA == iB && iR.size() == 0) {  // i,i->
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use DOT" << std::endl;
+#endif
+    return {
+      arma::Mat<T>(
+        1, 1, arma::fill::value(arma::dot(_as_mat(a), _as_mat(b)))),
+      iR};
+  } else if (
+    iA.size() == 1 && iB.size() == 1 && iR.size() == 2
+    && iA.at(0) == iR.at(0) && iB.at(0) == iR.at(1)) {  // i,j-> ij
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use outer" << std::endl;
+#endif
+    return {_as_mat(a) * _as_mat(b).t(), iR};
+  } else if (iA.size() == 2 && iB.size() == 1 && iA.at(1) == iB.at(0) && iR.at(0) == iA.at(0)) {  // ij,j->i
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use AXPY" << std::endl;
+#endif
+    return {_as_mat(a) * _as_mat(b), iR};
+  } else if (iA.size() == 2 && iB.size() == 1 && iA.at(0) == iB.at(0) && iR.at(0) == iA.at(1)) {  // ji,j->i
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use AXPY" << std::endl;
+#endif
+    return {_as_mat(a).t() * _as_mat(b), iR};
+  } else if (iA.size() == 1 && iB.size() == 2 && iA.at(0) == iB.at(1) && iR.at(0) == iB.at(0)) {  // j,ij->i
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use AXPY" << std::endl;
+#endif
+    return {_as_mat(b) * _as_mat(a), iR};
+  } else if (iA.size() == 1 && iB.size() == 2 && iA.at(0) == iB.at(0) && iR.at(0) == iB.at(1)) {  // i,ij->j
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use AXPY" << std::endl;
+#endif
+    return {_as_mat(b).t() * _as_mat(a), iR};
+  } else if (iA.size() == 2 && iA == iB && iB == iR) {  // ij,ij->ij
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use Hadamard" << std::endl;
+#endif
+    return {_as_mat(a) % _as_mat(b), iR};
+  } else if (iA.size() == 2 && iA == iB && iR.size() == 0) {  // ij,ij->
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use reduce" << std::endl;
+#endif
+    return {arma::Mat<T>(1, 1, arma::fill::value(arma::accu(_as_mat(a) % _as_mat(b)))), iR};
+  } else if (
+    iA.size() == 2 && iB.size() == 2
+    && iA.at(1) == iB.at(0) && iR.at(0) == iA.at(0) && iR.at(1) == iB.at(1)) {  // ik,kj->ij
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use GEMM" << std::endl;
+#endif
+    return {_as_mat(a) * _as_mat(b), iR};
+  } else if (
+    iA.size() == 2 && iB.size() == 2
+    && iA.at(0) == iB.at(0) && iR.at(0) == iA.at(1) && iR.at(1) == iB.at(1)) {  // ki,kj->ij
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use GEMM" << std::endl;
+#endif
+    return {_as_mat(a).t() * _as_mat(b), iR};
+  } else if (
+    iA.size() == 2 && iB.size() == 2
+    && iA.at(0) == iB.at(0) && iR.at(0) == iA.at(1) && iR.at(1) == iB.at(1)) {  // ki,kj->ij
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use GEMM" << std::endl;
+#endif
+    return {_as_mat(a).t() * _as_mat(b), iR};
+  } else if (
+    iA.size() == 2 && iB.size() == 2
+    && iA.at(1) == iB.at(1) && iR.at(0) == iA.at(0) && iR.at(1) == iB.at(0)) {  // ik,jk->ij
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use GEMM" << std::endl;
+#endif
+    return {_as_mat(a) * _as_mat(b).t(), iR};
+  } else if (iA.size() <= 2 && iB.size() <= 2) {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use evaluate_mat" << std::endl;
+#endif
+    return {transformation.evaluate_mat<T>(_as_mat(a), _as_mat(b)), iR};
+  } else if (iA.size() <= 2 && iB.size() == 3) {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use evaluate_mat" << std::endl;
+#endif
+    return {transformation.evaluate_mat<T>(_as_mat(a), _as_cube(b)), iR};
+  } else if (iA.size() == 3 && iB.size() <= 2) {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use evaluate_mat" << std::endl;
+#endif
+    return {transformation.evaluate_mat<T>(_as_cube(a), _as_mat(b)), iR};
+  } else if (iA.size() == 3 && iB.size() == 3) {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use evaluate_mat" << std::endl;
+#endif
+    return {transformation.evaluate_mat<T>(_as_cube(a), _as_cube(b)), iR};
+  }
+
+  throw EvaluationError("unhandled case, please report bug!");
+}
+
+template <typename T>
+arma::Mat<T> ContractionEngine<T>::_evaluate_final(
+const Operand& a, const Equation& transformation) {
+  assert(transformation.n() == 2);
+
+  auto iA = transformation.at(0);
+  auto iR = transformation.at(1);
+
+#ifdef ARMA_EINSUM_DEBUG
+  std::cout << std::string(transformation) << std::endl;
+#endif
+
+  if (iA.size() == 2 && iR.size() == 0 && iA.at(0) == iA.at(1)) {  // ii->
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use trace" << std::endl;
+#endif
+    return arma::Mat<T>(1, 1, arma::fill::value(arma::trace(_as_mat(a))));
+  } else if (iA.size() > 0 && iR.size() == 0) {  // i-> or ij->
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use contraction" << std::endl;
+#endif
+    return arma::Mat<T>(1, 1, arma::fill::value(arma::accu(_as_mat(a))));
+  } else if (iA.size() == 2 && iR.size() == 2 && iA.at(0) == iR.at(1) && iA.at(1) == iR.at(0)) {  // ij->ji
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use transpose" << std::endl;
+#endif
+    return arma::Mat<T>(_as_mat(a).t());
+  } else if (iA.size() <= 2 && iA == iR) {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use direct" << std::endl;
+#endif
+    return _as_mat(a);
+  } else if (iA.size() <= 2) {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use evaluate_mat" << std::endl;
+#endif
+    return transformation.evaluate_mat<T>(_as_mat(a));
+  } else if (iA.size() == 3) {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use evaluate_mat" << std::endl;
+#endif
+    return transformation.evaluate_mat<T>(_as_cube(a));
+  }
+
+  throw EvaluationError("unhandled case, please report bug!");
+}
+
+template <typename T>
+path_t ContractionEngine<T>::find_path_greedy(const Equation& eq) {
+  auto ceq = eq;
+
+  path_t result;
+
+  while (ceq.n() > 2) {
+    uint64_t cost = ceq.length();
+    step_t best_step = {0, 1};
+
+    // find best step
+    for (uint64_t jop = 1; jop < ceq.n() - 1; ++jop) {
+      for (uint64_t iop = 0; iop < jop; ++iop) {
+        if (jop == iop) {
+          continue;
+        }
+
+        auto intermediates = _remaining_intermediate(ceq, {iop, jop});
+        auto transformation = Equation({ceq.at(iop), ceq.at(jop), intermediates});
+        auto simplified = _simplify(ceq, {iop, jop}, transformation.operands().back());
+
+        if (simplified.length() < cost) {
+          cost = simplified.length();
+          best_step = {iop, jop};
+        }
+      }
+    }
+
+    auto intermediates = _remaining_intermediate(ceq, best_step);
+    auto transformation = Equation({ceq.at(best_step[0]), ceq.at(best_step[1]), intermediates});
+    ceq = _simplify(ceq, best_step, transformation.operands().back());
+
+    result.push_back(best_step);
+  }
+
+  return result;
+}
+
+template <typename T>
+template <ArmadilloType... Types>
+arma::Mat<T> ContractionEngine<T>::evaluate_mat(
+const Optimization& level, const Equation& eq, const Types&... operands) const {
+  // 1. Direct Unpack into std::list
+  std::list<Operand> stack;
+  size_t op_idx = 0;
+  ([&](const auto& op) {
+    Operand opx = {std::cref(op), eq.operands()[op_idx++]};
+    stack.push_back(opx);
+  }(operands), ...);
+
+  // 2. Contraction if needed
+  Equation current_eq = eq;
+  if (current_eq.n() > 2) {
+    path_t path = find_path_greedy(current_eq);
+
+    for (const auto& step : path) {
+      auto itA = std::next(stack.begin(), static_cast<ssize_t>(step[0]));
+      auto itB = std::next(stack.begin(), static_cast<ssize_t>(step[1]));
+
+      // Calculate intermediate labels
+      indices_t inter = _remaining_intermediate(current_eq, step);
+
+      // Construct & evaluate the transformation equation for this pair
+      Equation transformation({itA->labels, itB->labels, inter});
+#ifdef ARMA_EINSUM_DEBUG
+      std::cout << std::string(current_eq);
+#endif
+      Operand result = _evaluate_pair(*itA, *itB, transformation);
+
+      // update
+      stack.erase(itA);
+      *itB = std::move(result);
+      current_eq = _simplify(current_eq, step, inter);
+    }
+  }
+
+  return _evaluate_final(stack.front(), current_eq);
+}
+
+/**
+ * Evaluate an Einstein summation
+ *
+ * @warning result must be representable as a `arma::Mat<T>`
+ *
+ * @tparam T floating point type
+ * @tparam Types Armadillo types
+ * @param equation an equation
+ * @param operands Armadillo objects
+ * @return Result, as a matrix
+ */
 template <typename T, ArmadilloType... Types>
 arma::Mat<T> einsum_mat(const std::string& equation, const Types&... operands) {
-  return parse(equation).evaluate_mat<T>(operands...);
+  return Equation::parse(equation).evaluate_mat<T>(operands...);
+}
+
+/**
+ * Evaluate an Einstein summation, using an optimized path
+ *
+ * @warning result must be representable as a `arma::Mat<T>`
+ *
+ * @tparam T floating point type
+ * @tparam Types Armadillo types
+ * @param level level of optimization for the path
+ * @param equation an equation
+ * @param operands Armadillo objects
+ * @return Result, as a matrix
+ */
+template <typename T, ArmadilloType... Types>
+arma::Mat<T> einsum_mat_opt(const Optimization& level, const std::string& equation, const Types&... operands) {
+  return ContractionEngine<T>().evaluate_mat(level, Equation::parse(equation), operands...);
 }
 
 }  // namespace armaeinsum

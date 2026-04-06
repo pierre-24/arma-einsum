@@ -13,7 +13,7 @@ It enables expressive tensor-style operations (dot products, traces, contraction
 - No support for:
     - Ellipsis (`...`)
     - Broadcasting (NumPy-style)
-- No [optimization](https://optimized-einsum.readthedocs.io/en/stable/) via the creation of intermediate or use of BLAS, **so performances are suboptimal** (about two order of magnitudes slower).
+- Can partially optimize the execution path using a "greedy" algorithm.
 
 ## Installation
 
@@ -45,11 +45,15 @@ If you want to use a Meson wrap file instead, check [the example](example-meson)
 
 ```cpp
 armaeinsum::einsum_mat<T>("equation", operand1, operand2, ...);
+armaeinsum::einsum_mat_opt<T>(level, "equation", operand1, operand2, ...);
 ```
+
+The latter will be faster, but might generate intermediate results.
 
 ### Parameters
 
 - **`T`**: Any floating point type supported by Armadillo (mixing types is not supported).
+- **`level`**: level of optimization for the path, for the moment only `armaeinsum::Greedy` is available.
 - **`equation`**: A string describing the Einstein summation (see below).
 - **`operands`**: A variadic list of Armadillo objects:
     - `arma::Col`
@@ -62,7 +66,7 @@ armaeinsum::einsum_mat<T>("equation", operand1, operand2, ...);
 The equation string follows standard Einstein summation notation:
 
 ```
-"indices[,indices...] [-> output_indices]"
+"indices[,indices...][->output_indices]"
 ```
 
 ### Rules
@@ -77,7 +81,7 @@ The equation string follows standard Einstein summation notation:
   ```
   "ij,jk->ik"
   ```
-- If `->` is omitted, output indices are inferred automatically.
+- If `->` is omitted, output indices are inferred automatically, in alphabetical order (thus `"ji"` is `"ji->ij""`).
 - **The output must be representable as a `arma::Mat<T>`**.
 
 ## Examples

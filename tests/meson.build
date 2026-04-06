@@ -19,6 +19,7 @@ endforeach
 tests = [
     'parser',
     'iterator',
+    'contraction',
     'einsum',
 ]
 
