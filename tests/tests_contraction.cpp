@@ -1,4 +1,6 @@
 #include <armadillo>
+
+#define ARMA_EINSUM_DEBUG
 #include <arma_einsum.hpp>
 
 #include <string>
@@ -77,5 +79,35 @@ TEST_F(ContractionTests, unitary_transformation) {
     EXPECT_TRUE(arma::approx_equal(
       armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::Equation::parse(eq), R, B, R),
       R.t() * B * R,
+      "abstol", 1e-5));
+}
+
+TEST_F(ContractionTests, aotomo) {
+    // Example taken from quantum chemistry: AO->MO
+    auto C = arma::randn<arma::Mat<TEST_FLOAT>>(5, 8);
+    auto A_ao = arma::randn<arma::Mat<TEST_FLOAT>>(8, 8);
+
+    std::string eq = "ij,kl,jl->ik";
+
+    EXPECT_TRUE(arma::approx_equal(
+      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::Equation::parse(eq), C, C, A_ao),
+      C * A_ao * C.t(),
+      "abstol", 1e-5));
+}
+
+TEST_F(ContractionTests, density) {
+    // Example taken from quantum chemistry: Density matrix
+    auto C = arma::randn<arma::Mat<TEST_FLOAT>>(5, 8);
+    auto n = arma::Col<TEST_FLOAT>(5);
+
+    for (auto i = 0; i < 3; i++) {
+        n.at(i) = 2.0;
+    }
+
+    std::string eq = "i,ik,il->kl";
+
+    EXPECT_TRUE(arma::approx_equal(
+      armaeinsum::ContractionEngine<TEST_FLOAT>().evaluate_mat(armaeinsum::Equation::parse(eq), n, C, C),
+      C.t() * arma::diagmat(n) * C,
       "abstol", 1e-5));
 }

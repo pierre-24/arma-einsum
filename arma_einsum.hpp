@@ -124,7 +124,8 @@ class IndicesIterator {
 using indices_t = std::vector<char>;
 
 /**
- * Equation
+ * Equation, hold the sets of indices (as `_operands`).
+ * This object is immutable.
  */
 class Equation {
  private:
@@ -135,6 +136,9 @@ class Equation {
 
  public:
   Equation() = default;
+  Equation(const Equation& o) = default;
+  Equation(Equation&&) = default;
+  Equation& operator=(const Equation&) = default;
 
   explicit Equation(const std::vector<indices_t>& indices): _eq(indices) {
     if (indices.size() < 2) {
@@ -145,7 +149,7 @@ class Equation {
   /// Get operands
   [[nodiscard]] const std::vector<indices_t>& operands() const  { return _eq; }
 
-  /// Get operand
+  /// Get a given operand
   [[nodiscard]] const indices_t& at(uint64_t index) const {
     return _eq.at(index);
   }
@@ -345,6 +349,8 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
         actual_rank = 3;
       } else if constexpr (arma::is_Col<OpType>::value || arma::is_Row<OpType>::value) {
         actual_rank = 1;
+      } else if (op.n_rows == 1 || op.n_cols == 1) {
+        actual_rank = 1;
       } else {
         actual_rank = 2;  // Standard Mat
       }
@@ -428,6 +434,8 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
         product *= op.at(v[ids[0]], v[ids[1]], v[ids[2]]);
       } else if constexpr (arma::is_Col<OpType>::value || arma::is_Row<OpType>::value) {
         product *= op.at(v[ids[0]]);
+      } else if (op.n_rows == 1 || op.n_cols == 1) {
+        product *= op.at(v[ids[0]]);
       } else {
         product *= op.at(v[ids[0]], v[ids[1]]);
       }
@@ -509,8 +517,8 @@ template <typename T>
 class ContractionEngine {
  private:
   struct Operand {
-    /// Variant to hold intermediates (Mat, Cube, or even a Scalar)
-    std::variant<arma::Mat<T>, arma::Cube<T>, T> data;
+    /// Variant to hold intermediates (Mat or Cube)
+    std::variant<arma::Mat<T>, arma::Cube<T>> data;
     /// Associated labels
     indices_t labels;
   };
@@ -519,13 +527,19 @@ class ContractionEngine {
   static Equation _simplify(const Equation& eq, const step_t& step, const indices_t& result);
 
   /// Find remaining intermediates after doing the contraction at positions `a` and `b`
-  static indices_t _remaining_intermediate(const Equation& eq, uint64_t a, uint64_t b);
+  static indices_t _remaining_intermediate(const Equation& eq, const step_t& step);
+
+  /// Evaluate contraction between a pair of operands, using `transformation`.
+  /// Attempt to use Armadillo function when possible, fall back to `transformation.evaluate_mat` if not.
+  static Operand _evaluate_pair(const Operand& a, const Operand& b, const Equation& transformation);
+
+  static arma::Mat<T> _evaluate_final(const Operand& a, const Equation& transformation);
 
  public:
   ContractionEngine() = default;
 
-  /// Find a path to evaluate `eq`
-  static path_t find_path(const Equation& eq);
+  /// Find a path to evaluate `eq`, using the "greedy" algorithm (use best contraction at each step)
+  static path_t find_path_greedy(const Equation& eq);
 
   /**
    * Evaluate `eq` by optimizing it when possible
@@ -552,7 +566,7 @@ Equation ContractionEngine<T>::_simplify(const Equation& eq, const step_t& step,
 }
 
 template <typename T>
-indices_t ContractionEngine<T>::_remaining_intermediate(const Equation& eq, uint64_t a, uint64_t b) {
+indices_t ContractionEngine<T>::_remaining_intermediate(const Equation& eq, const step_t& step) {
   // check which indices are required (they cannot be removed)
   std::set<char> required;
   for (const auto& c : eq.operands().back()) {
@@ -560,7 +574,7 @@ indices_t ContractionEngine<T>::_remaining_intermediate(const Equation& eq, uint
   }
 
   for (uint64_t iop = 0; iop < eq.n() - 1; ++iop) {
-    if (iop != a && iop != b) {
+    if (iop != step[0] && iop != step[1]) {
       for (const auto& c : eq.at(iop)) {
         required.insert(c);
       }
@@ -580,23 +594,129 @@ indices_t ContractionEngine<T>::_remaining_intermediate(const Equation& eq, uint
     }
   };
 
-  add_if_required(eq.at(a));
-  add_if_required(eq.at(b));
+  add_if_required(eq.at(step[0]));
+  add_if_required(eq.at(step[1]));
 
   return intermediate;
 }
 
 template <typename T>
-path_t ContractionEngine<T>::find_path(const Equation& eq) {
+typename ContractionEngine<T>::Operand ContractionEngine<T>::_evaluate_pair(
+const Operand& a, const Operand& b, const Equation& transformation) {
+  assert(transformation.n() == 3);
+
+  auto iA = transformation.at(0);
+  auto iB = transformation.at(1);
+  auto iR = transformation.at(2);
+
+#ifdef ARMA_EINSUM_DEBUG
+  std::cout << " && " << std::string(transformation) << std::endl;
+#endif
+
+  if (iA.size() == 1 && iA == iB && iR.size() == 0) {  // i,i->
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use DOT" << std::endl;
+#endif
+    auto r = arma::Mat<T>(1, 1);
+    r.at(0, 0) = arma::dot(std::get<arma::Mat<T>>(a.data), std::get<arma::Mat<T>>(b.data));
+    return {r, iR};
+  } else if (iA.size() == 2 && iB.size() == 1 && iA.at(1) == iB.at(0) && iR.at(0) == iA.at(0)) {  // ij,j->i
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use AXPY" << std::endl;
+#endif
+    return {std::get<arma::Mat<T>>(a.data) * std::get<arma::Mat<T>>(b.data), iR};
+  } else if (iA.size() == 2 && iA == iB && iB == iR) {  // ij,ij->ij
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use Hadamard" << std::endl;
+#endif
+    return {std::get<arma::Mat<T>>(a.data) % std::get<arma::Mat<T>>(b.data), iR};
+  } else if (
+    iA.size() == 2 && iB.size() == 2
+    && iA.at(1) == iB.at(0) && iR.at(0) == iA.at(0) && iR.at(1) == iB.at(1)) {  // ik,kj->ij
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use GEMM" << std::endl;
+#endif
+    return {std::get<arma::Mat<T>>(a.data) * std::get<arma::Mat<T>>(b.data), iR};
+  } else {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use evaluate_mat" << std::endl;
+#endif
+    return {transformation.evaluate_mat<T>(std::get<arma::Mat<T>>(a.data), std::get<arma::Mat<T>>(b.data)), iR};
+  }
+}
+
+template <typename T>
+arma::Mat<T> ContractionEngine<T>::_evaluate_final(
+const Operand& a, const Equation& transformation) {
+  assert(transformation.n() == 2);
+
+  auto iA = transformation.at(0);
+  auto iR = transformation.at(1);
+
+#ifdef ARMA_EINSUM_DEBUG
+  std::cout << std::string(transformation) << std::endl;
+#endif
+
+  if (iA.size() == 2 && iR.size() == 0 && iA.at(0) == iA.at(1)) {  // ii->
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use trace" << std::endl;
+#endif
+    auto r = arma::Mat<T>(1, 1);
+    r.at(0, 0) = arma::trace(std::get<arma::Mat<T>>(a.data));
+    return r;
+  } else if (iA.size() > 0 && iR.size() == 0) {  // i-> or ij->
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use contraction" << std::endl;
+#endif
+    auto r = arma::Mat<T>(1, 1);
+    r.at(0, 0) = arma::accu(std::get<arma::Mat<T>>(a.data));
+    return r;
+  } else if (iA.size() == 2 && iR.size() == 2 && iA.at(0) == iR.at(1) && iA.at(1) == iR.at(0)) {  // ij->ji
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use transpose" << std::endl;
+#endif
+    return arma::Mat<T>(std::get<arma::Mat<T>>(a.data).t());
+  } else {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use direct" << std::endl;
+#endif
+    return std::get<arma::Mat<T>>(a.data);
+  }
+}
+
+template <typename T>
+path_t ContractionEngine<T>::find_path_greedy(const Equation& eq) {
+  auto ceq = eq;
+
   path_t result;
 
-  if (eq.n() > 2) {
-    auto intermediates = _remaining_intermediate(eq, 0, 1);
-    step_t step = {0, 1};
-    auto transformation = Equation({eq.at(0), eq.at(1), intermediates});
-    std::cout << std::string(eq)
-              << " & " << std::string(transformation)
-              << " = " << std::string(_simplify(eq, step, transformation.operands().back())) << std::endl;
+  while (ceq.n() > 2) {
+    uint64_t cost = ceq.length();
+    step_t best_step = {0, 1};
+
+    // find best step
+    for (uint64_t jop = 1; jop < ceq.n() - 1; ++jop) {
+      for (uint64_t iop = 0; iop < jop; ++iop) {
+        if (jop == iop) {
+          continue;
+        }
+
+        auto intermediates = _remaining_intermediate(ceq, {iop, jop});
+        auto transformation = Equation({ceq.at(iop), ceq.at(jop), intermediates});
+        auto simplified = _simplify(ceq, {iop, jop}, transformation.operands().back());
+
+        if (simplified.length() < cost) {
+          cost = simplified.length();
+          best_step = {iop, jop};
+        }
+      }
+    }
+
+    auto intermediates = _remaining_intermediate(ceq, best_step);
+    auto transformation = Equation({ceq.at(best_step[0]), ceq.at(best_step[1]), intermediates});
+    ceq = _simplify(ceq, best_step, transformation.operands().back());
+
+    result.push_back(best_step);
   }
 
   return result;
@@ -616,14 +736,29 @@ arma::Mat<T> ContractionEngine<T>::evaluate_mat(const Equation& eq, const Types&
 
   unpack(std::make_index_sequence<sizeof...(Types)>{});
 
-  if (stack.size() > 1) {
-    std::cout << "need to work" << std::endl;
-    auto path = find_path(eq);
+  // use a sequence of transformations
+  auto ceq = eq;
+  if (ceq.n() > 2) {
+    for (auto& step : find_path_greedy(eq)) {
+#ifdef ARMA_EINSUM_DEBUG
+      std::cout << std::string(ceq);
+#endif
+      auto intermediates = _remaining_intermediate(ceq, step);
+      auto transformation = Equation({ceq.at(step[0]), ceq.at(step[1]), intermediates});
+
+      auto opA = std::move(stack[step[0]]);
+      auto opB = std::move(stack[step[1]]);
+
+      stack.erase(stack.begin() + static_cast<int64_t>(step[0]));
+
+      stack[step[1] - 1] = _evaluate_pair(opA, opB, transformation);
+
+      ceq = _simplify(ceq, step, transformation.operands().back());
+    }
   }
 
-  auto final_operand = eq.operands().back();
-
-  return eq.evaluate_mat<T>(operands...);
+  // final transformation to get the result
+  return _evaluate_final(stack[0], ceq);
 }
 
 template <typename T, ArmadilloType... Types>
