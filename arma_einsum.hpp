@@ -623,14 +623,37 @@ const Operand& a, const Operand& b, const Equation& transformation) {
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use DOT" << std::endl;
 #endif
-    auto r = arma::Mat<T>(1, 1);
-    r.at(0, 0) = arma::dot(std::get<arma::Mat<T>>(a.data), std::get<arma::Mat<T>>(b.data));
-    return {r, iR};
+    return {
+      arma::Mat<T>(
+        1, 1, arma::fill::value(arma::dot(std::get<arma::Mat<T>>(a.data), std::get<arma::Mat<T>>(b.data)))),
+      iR};
+  } else if (
+    iA.size() == 1 && iB.size() == 1 && iR.size() == 2
+    && iA.at(0) == iR.at(0) && iB.at(0) == iR.at(1)) {  // i,j-> ij
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use outer" << std::endl;
+#endif
+    return {std::get<arma::Mat<T>>(a.data) * std::get<arma::Mat<T>>(b.data).t(), iR};
   } else if (iA.size() == 2 && iB.size() == 1 && iA.at(1) == iB.at(0) && iR.at(0) == iA.at(0)) {  // ij,j->i
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use AXPY" << std::endl;
 #endif
     return {std::get<arma::Mat<T>>(a.data) * std::get<arma::Mat<T>>(b.data), iR};
+  } else if (iA.size() == 2 && iB.size() == 1 && iA.at(0) == iB.at(0) && iR.at(0) == iA.at(1)) {  // ji,j->i
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use AXPY" << std::endl;
+#endif
+    return {std::get<arma::Mat<T>>(a.data).t() * std::get<arma::Mat<T>>(b.data), iR};
+  } else if (iA.size() == 1 && iB.size() == 2 && iA.at(0) == iB.at(1) && iR.at(0) == iB.at(0)) {  // j,ij->i
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use AXPY" << std::endl;
+#endif
+    return {std::get<arma::Mat<T>>(b.data) * std::get<arma::Mat<T>>(a.data), iR};
+  } else if (iA.size() == 1 && iB.size() == 2 && iA.at(0) == iB.at(0) && iR.at(0) == iB.at(1)) {  // i,ij->j
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use AXPY" << std::endl;
+#endif
+    return {std::get<arma::Mat<T>>(b.data).t() * std::get<arma::Mat<T>>(a.data), iR};
   } else if (iA.size() == 2 && iA == iB && iB == iR) {  // ij,ij->ij
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use Hadamard" << std::endl;
@@ -643,6 +666,27 @@ const Operand& a, const Operand& b, const Equation& transformation) {
     std::cout << "* use GEMM" << std::endl;
 #endif
     return {std::get<arma::Mat<T>>(a.data) * std::get<arma::Mat<T>>(b.data), iR};
+  } else if (
+    iA.size() == 2 && iB.size() == 2
+    && iA.at(0) == iB.at(0) && iR.at(0) == iA.at(1) && iR.at(1) == iB.at(1)) {  // ki,kj->ij
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use GEMM" << std::endl;
+#endif
+    return {std::get<arma::Mat<T>>(a.data).t() * std::get<arma::Mat<T>>(b.data), iR};
+  } else if (
+    iA.size() == 2 && iB.size() == 2
+    && iA.at(0) == iB.at(0) && iR.at(0) == iA.at(1) && iR.at(1) == iB.at(1)) {  // ki,kj->ij
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use GEMM" << std::endl;
+#endif
+    return {std::get<arma::Mat<T>>(a.data).t() * std::get<arma::Mat<T>>(b.data), iR};
+  } else if (
+    iA.size() == 2 && iB.size() == 2
+    && iA.at(1) == iB.at(1) && iR.at(0) == iA.at(0) && iR.at(1) == iB.at(0)) {  // ik,jk->ij
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use GEMM" << std::endl;
+#endif
+    return {std::get<arma::Mat<T>>(a.data) * std::get<arma::Mat<T>>(b.data).t(), iR};
   } else {
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use evaluate_mat" << std::endl;
@@ -667,16 +711,12 @@ const Operand& a, const Equation& transformation) {
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use trace" << std::endl;
 #endif
-    auto r = arma::Mat<T>(1, 1);
-    r.at(0, 0) = arma::trace(std::get<arma::Mat<T>>(a.data));
-    return r;
+    return arma::Mat<T>(1, 1, arma::fill::value(arma::trace(std::get<arma::Mat<T>>(a.data))));
   } else if (iA.size() > 0 && iR.size() == 0) {  // i-> or ij->
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use contraction" << std::endl;
 #endif
-    auto r = arma::Mat<T>(1, 1);
-    r.at(0, 0) = arma::accu(std::get<arma::Mat<T>>(a.data));
-    return r;
+    return arma::Mat<T>(1, 1, arma::fill::value(arma::accu(std::get<arma::Mat<T>>(a.data))));
   } else if (iA.size() == 2 && iR.size() == 2 && iA.at(0) == iR.at(1) && iA.at(1) == iR.at(0)) {  // ij->ji
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use transpose" << std::endl;
