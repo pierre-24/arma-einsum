@@ -685,6 +685,11 @@ const Operand& a, const Operand& b, const Equation& transformation) {
     std::cout << "* use Hadamard" << std::endl;
 #endif
     return {_as_mat(a) % _as_mat(b), iR};
+  } else if (iA.size() == 2 && iA == iB && iR.size() == 0) {  // ij,ij->
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use reduce" << std::endl;
+#endif
+    return {arma::Mat<T>(1, 1, arma::fill::value(arma::accu(_as_mat(a) % _as_mat(b)))), iR};
   } else if (
     iA.size() == 2 && iB.size() == 2
     && iA.at(1) == iB.at(0) && iR.at(0) == iA.at(0) && iR.at(1) == iB.at(1)) {  // ik,kj->ij
@@ -713,12 +718,29 @@ const Operand& a, const Operand& b, const Equation& transformation) {
     std::cout << "* use GEMM" << std::endl;
 #endif
     return {_as_mat(a) * _as_mat(b).t(), iR};
-  } else {
+  } else if (iA.size() <= 2 && iB.size() <= 2) {
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use evaluate_mat" << std::endl;
 #endif
     return {transformation.evaluate_mat<T>(_as_mat(a), _as_mat(b)), iR};
+  } else if (iA.size() <= 2 && iB.size() == 3) {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use evaluate_mat" << std::endl;
+#endif
+    return {transformation.evaluate_mat<T>(_as_mat(a), _as_cube(b)), iR};
+  } else if (iA.size() == 3 && iB.size() <= 2) {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use evaluate_mat" << std::endl;
+#endif
+    return {transformation.evaluate_mat<T>(_as_cube(a), _as_mat(b)), iR};
+  } else if (iA.size() == 3 && iB.size() == 3) {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use evaluate_mat" << std::endl;
+#endif
+    return {transformation.evaluate_mat<T>(_as_cube(a), _as_cube(b)), iR};
   }
+
+  throw EvaluationError("unhandled case, please report bug!");
 }
 
 template <typename T>
@@ -748,12 +770,24 @@ const Operand& a, const Equation& transformation) {
     std::cout << "* use transpose" << std::endl;
 #endif
     return arma::Mat<T>(_as_mat(a).t());
-  } else {
+  } else if (iA.size() <= 2 && iA == iR) {
 #ifdef ARMA_EINSUM_DEBUG
     std::cout << "* use direct" << std::endl;
 #endif
     return _as_mat(a);
+  } else if (iA.size() <= 2) {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use evaluate_mat" << std::endl;
+#endif
+    return transformation.evaluate_mat<T>(_as_mat(a));
+  } else if (iA.size() == 3) {
+#ifdef ARMA_EINSUM_DEBUG
+    std::cout << "* use evaluate_mat" << std::endl;
+#endif
+    return transformation.evaluate_mat<T>(_as_cube(a));
   }
+
+  throw EvaluationError("unhandled case, please report bug!");
 }
 
 template <typename T>
@@ -820,6 +854,9 @@ const Optimization& level, const Equation& eq, const Types&... operands) const {
 
       // Construct & evaluate the transformation equation for this pair
       Equation transformation({itA->labels, itB->labels, inter});
+#ifdef ARMA_EINSUM_DEBUG
+      std::cout << std::string(current_eq);
+#endif
       Operand result = _evaluate_pair(*itA, *itB, transformation);
 
       // update

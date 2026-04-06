@@ -13,7 +13,7 @@ It enables expressive tensor-style operations (dot products, traces, contraction
 - No support for:
     - Ellipsis (`...`)
     - Broadcasting (NumPy-style)
-- No [optimization](https://optimized-einsum.readthedocs.io/en/stable/) via the creation of intermediate or use of BLAS, **so performances are suboptimal** (about two order of magnitudes slower).
+- Can partially optimize the execution path using a "greedy" algorithm.
 
 ## Installation
 
