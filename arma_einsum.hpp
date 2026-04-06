@@ -226,7 +226,7 @@ class Equation {
 };
 
 /// Parse indices
-indices_t Equation::_parse_indices(const std::string& input, uint64_t& position) {
+inline indices_t Equation::_parse_indices(const std::string& input, uint64_t& position) {
   if (position >= input.length()) {
     throw ParserError(position, "expected indices, got EOS");
   }
@@ -253,7 +253,7 @@ indices_t Equation::_parse_indices(const std::string& input, uint64_t& position)
   return indices;
 }
 
-Equation Equation::parse(const std::string& equation) {
+inline Equation Equation::parse(const std::string& equation) {
   if (equation.empty()) {
     throw ParserError(0, "empty equation");
   }
