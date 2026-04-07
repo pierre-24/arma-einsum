@@ -132,8 +132,9 @@ class Equation {
  private:
   std::vector<indices_t> _eq;
 
-  /// Parse the indices starting at `position` in `input`
-  static indices_t _parse_indices(const std::string& input, uint64_t& position);
+  static indices_t _calculate_implicit(const std::vector<indices_t>& operands);
+
+  static void _validate_usage(const std::vector<indices_t>& operands);
 
  public:
   Equation() = default;
@@ -142,9 +143,7 @@ class Equation {
   Equation& operator=(const Equation&) = default;
 
   explicit Equation(const std::vector<indices_t>& indices): _eq(indices) {
-    if (indices.size() < 2) {
-      throw EvaluationError("not enough operands");
-    }
+    _validate_usage(_eq);
   }
 
   /// Get operands
@@ -225,103 +224,124 @@ class Equation {
   static Equation parse(const std::string& equation);
 };
 
-/// Parse indices
-inline indices_t Equation::_parse_indices(const std::string& input, uint64_t& position) {
-  if (position >= input.length()) {
-    throw ParserError(position, "expected indices, got EOS");
+inline indices_t Equation::_calculate_implicit(const std::vector<indices_t>& operands) {
+  uint64_t counts[256] = {0};
+  std::vector<char> order;  // To preserve the first-appearance order
+
+  for (const auto& op : operands) {
+    for (char c : op) {
+      if (counts[static_cast<unsigned char>(c)] == 0) {
+        order.push_back(c);
+      }
+      counts[static_cast<unsigned char>(c)]++;
+    }
   }
 
-  if (!isalpha(input[position])) {
-    throw ParserError(position, "expected a letter for indices");
+  indices_t result;
+  for (char c : order) {
+    // In standard einsum, indices appearing once are kept.
+    // Indices appearing twice are contracted.
+    if (counts[static_cast<unsigned char>(c)] == 1) {
+      result.push_back(c);
+    }
   }
 
-  indices_t indices;
-  while (position < input.length() && isalpha(input[position])) {
-    indices.push_back(input[position]);
-    position++;
+  // Sort to be deterministic, as per NumPy convention
+  std::sort(result.begin(), result.end());
+
+  if (result.size() > 3) {
+    throw EvaluationError("Implicit result rank > 3");
   }
 
-  if (indices.empty()) {
-    throw ParserError(position, "expected at least one index");
-  }
-
-  if (indices.size() > 3) {
-    throw ParserError(
-      position, ARMA_EINSUM_FORMAT("too many indices ({}), armadillo only can go up to 3", indices.size()));
-  }
-
-  return indices;
+  return result;
 }
 
-inline Equation Equation::parse(const std::string& equation) {
+inline void Equation::_validate_usage(const std::vector<indices_t>& operands) {
+  if (operands.size() < 2) {
+    throw EvaluationError("At least two operands are required");
+  }
+
+  // 1. Map out all indices present in the input operands
+  bool input_registry[256] = {false};
+
+  for (size_t i = 0; i < operands.size() - 1; ++i) {
+    for (char c : operands[i]) {
+      input_registry[static_cast<unsigned char>(c)] = true;
+    }
+  }
+
+  // 2. Cross-reference the result indices against the registry
+  const indices_t& result_labels = operands.back();
+  for (char c : result_labels) {
+    if (!input_registry[static_cast<unsigned char>(c)]) {
+      throw ParserError(
+          0, ARMA_EINSUM_FORMAT(
+                 "Result integrity violation: index '{}' appears in result but not in any input operand.", c));
+    }
+  }
+}
+
+inline Equation Equation::parse(const std::string& eq) {
+  std::string_view equation = eq;
   if (equation.empty()) {
-    throw ParserError(0, "empty equation");
+    throw ParserError(0, "Empty equation");
   }
 
-  uint64_t i = 0;
+  std::vector<indices_t> operands;
+  indices_t current_indices;
+  bool parsing_result = false;
+  size_t i = 0;
 
-  // parse operands
-  std::vector<indices_t> eq;
+  auto flush_operand = [&]() {
+    if (current_indices.size() > 3) {
+      throw ParserError(i, "Rank exceeds Armadillo limit (max 3)");
+    }
+    operands.push_back(std::move(current_indices));
+    current_indices = {};
+  };
+
   while (i < equation.length()) {
-    if (isalpha(equation[i])) {
-      eq.push_back(_parse_indices(equation, i));
-    } else if (equation[i] == ',') {
+    char c = equation[i];
+
+    if (std::isspace(c)) {
       i++;
-    } else if (equation[i] == '-') {
-      break;
-    } else {
-      throw ParserError(i, "unexpected character");
-    }
-  }
-
-  if (eq.empty()) {
-    throw ParserError(i, "expected at least one operand");
-  }
-
-  // parse result if any
-  if (equation[i] == '-') {
-    i++;
-    if (equation[i] != '>') {
-      throw ParserError(i, "expected '>'");
-    }
-    i++;
-
-    if (i == equation.length()) {  // result is a single number
-      eq.push_back(indices_t());
-      return Equation(eq);
+      continue;
     }
 
-    // there are indices for result
-    eq.push_back(_parse_indices(equation, i));
-
-    if (i != equation.length()) {
-      throw ParserError(i, "expected EOS, but the string is longer");
-    }
-
-    return Equation(eq);
-  }
-
-  // if not, use non-repeated indices in alphabetical order
-  indices_t nri;
-  for (auto& operand : eq) {
-    for (const auto& c : operand) {
-      if (auto position = std::find(nri.begin(), nri.end(), c); position != nri.end()) {
-        nri.erase(position);
-      } else {
-        nri.push_back(c);
+    if (std::isalpha(c)) {
+      current_indices.push_back(c);
+    } else if (c == ',') {
+      if (parsing_result) {
+        throw ParserError(i, "Unexpected comma in result section");
+      } else if (current_indices.empty()) {
+        throw ParserError(i, "Empty operand (double comma?)");
       }
+      flush_operand();
+    } else if (c == '-') {
+      if (parsing_result) {
+        throw ParserError(i, "Multiple arrows detected");
+      } else if (i + 1 >= equation.length() || equation[i + 1] != '>') {
+        throw ParserError(i, "Expected '->'");
+      }
+
+      flush_operand();
+      parsing_result = true;
+      i++;  // Skip the '>'
+    } else {
+      throw ParserError(i, "Invalid character in equation");
     }
+    i++;
   }
 
-  if (nri.size() > 3) {
-    throw ParserError(
-      i, ARMA_EINSUM_FORMAT("too many indices ({}) in result, armadillo only can go up to 3", nri.size()));
+  // Handle the final indices (either the result or the last operand)
+  flush_operand();
+
+  // If no arrow was provided, calculate implicit labels
+  if (!parsing_result) {
+    operands.push_back(_calculate_implicit(operands));
   }
 
-  std::sort(nri.begin(), nri.end());
-  eq.push_back(nri);
-
-  return Equation(eq);
+  return Equation(operands);
 }
 
 template <typename T, ArmadilloType... Types>
