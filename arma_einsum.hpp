@@ -202,6 +202,24 @@ class Equation {
   }
 
   /**
+   * Evaluate the size of each index, given `operands`
+   *
+   * @tparam Types Armadillo types
+   * @param operands Armadillo objects
+   * @return a std::map with, for each index in `_eq`, its size
+   */
+  template <ArmadilloType... Types> multival_t indices_size(const Types&... operands) const;
+
+  /**
+   * Estimate the flop count of `this`.
+   *
+   * @tparam T A floating point type
+   * @param indices_size the size of all indices appearing in `this`
+   * @return the estimated flop count to evaluate `this`
+   */
+  template <typename T> T estimate_flop_count(const multival_t& indices_size);
+
+  /**
    * Evaluate the equation using `operands` and return a matrix
    *
    * @tparam T a floating point type
@@ -210,7 +228,6 @@ class Equation {
    * @return a matrix defined by the equation
    */
   template <typename T, ArmadilloType... Types> arma::Mat<T> evaluate_mat(const Types&... operands) const;
-
 
   /**
    * Parse a given equation:
@@ -344,22 +361,14 @@ inline Equation Equation::parse(const std::string& eq) {
   return Equation(operands);
 }
 
-template <typename T, ArmadilloType... Types>
-arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
-  // 1. Basic validation of result dimensionality
-  const auto& result_indices = _eq.back();
-  if (result_indices.size() > 2) {
-    throw EvaluationError("Result rank > 2; use evaluate_cube() instead.");
-  }
-
-  // 2. Validate operand count
+template <ArmadilloType... Types>
+multival_t Equation::indices_size(const Types&... operands) const {
   if (sizeof...(Types) != _eq.size() - 1) {
     throw EvaluationError(ARMA_EINSUM_FORMAT("Expected {} operands, got {}", _eq.size() - 1, sizeof...(Types)));
   }
 
   multival_t indices_size;
 
-  // 3. Define and check sizes
   auto check_and_map = [&]<std::size_t... I>(std::index_sequence<I...>) {
     auto validate = [&]<typename T0>(auto idx, const T0& op) {
       using OpType = std::decay_t<T0>;
@@ -408,7 +417,32 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
 
   check_and_map(std::make_index_sequence<sizeof...(Types)>{});
 
-  // 4. Initialize result matrix
+  return indices_size;
+}
+
+template <typename T>
+T Equation::estimate_flop_count(const multival_t& indices_size) {
+  auto uniques = unique_indices();
+
+  T flop_count = std::accumulate(uniques.begin(), uniques.end(), 1, [&](T a, auto& b) {
+    return a * static_cast<T>(indices_size.at(b));
+  });
+
+  return flop_count * static_cast<T>(_eq.size() - 1);
+}
+
+template <typename T, ArmadilloType... Types>
+arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
+  // 1. Basic validation of result dimensionality
+  const auto& result_indices = _eq.back();
+  if (result_indices.size() > 2) {
+    throw EvaluationError("Result rank > 2; use evaluate_cube() instead.");
+  }
+
+  // 2. Define and check sizes
+  multival_t indices_size = this->indices_size(operands...);
+
+  // 3. Initialize result matrix
   arma::Mat<T> result;
   if (result_indices.empty()) {
     result.set_size(1, 1);
@@ -419,7 +453,7 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
   }
   result.zeros();
 
-  // Setup: Create the master label list (schema) and the ID maps
+  // 4. Setup: Create the master label list (schema) and the ID maps
   std::vector<char> all_labels;
   std::set<char> unique_labels;
   for (const auto& labels : _eq) {
@@ -537,6 +571,7 @@ using path_t = std::vector<step_t>;
 
 /// Method to find optimal path
 enum Optimization {
+  None,
   Greedy,
 };
 
@@ -591,7 +626,7 @@ class ContractionEngine {
   ContractionEngine() = default;
 
   /// Find a path to evaluate `eq`, using the "greedy" algorithm (use best contraction at each step)
-  static path_t find_path_greedy(const Equation& eq);
+  static path_t find_path_greedy(const Equation& eq, const multival_t& indices_size);
 
   /**
    * Evaluate `eq` by optimizing it when possible
@@ -812,13 +847,13 @@ const Operand& a, const Equation& transformation) {
 }
 
 template <typename T>
-path_t ContractionEngine<T>::find_path_greedy(const Equation& eq) {
+path_t ContractionEngine<T>::find_path_greedy(const Equation& eq, const multival_t& indices_size) {
   auto ceq = eq;
 
   path_t result;
 
   while (ceq.n() > 2) {
-    uint64_t cost = ceq.length();
+    T cost = ceq.estimate_flop_count<T>(indices_size);
     step_t best_step = {0, 1};
 
     // find best step
@@ -832,8 +867,11 @@ path_t ContractionEngine<T>::find_path_greedy(const Equation& eq) {
         auto transformation = Equation({ceq.at(iop), ceq.at(jop), intermediates});
         auto simplified = _simplify(ceq, {iop, jop}, transformation.operands().back());
 
-        if (simplified.length() < cost) {
-          cost = simplified.length();
+        T new_cost =
+          simplified.estimate_flop_count<T>(indices_size) + transformation.estimate_flop_count<T>(indices_size);
+
+        if (new_cost < cost) {
+          cost = new_cost;
           best_step = {iop, jop};
         }
       }
@@ -853,41 +891,47 @@ template <typename T>
 template <ArmadilloType... Types>
 arma::Mat<T> ContractionEngine<T>::evaluate_mat(
 const Optimization& level, const Equation& eq, const Types&... operands) const {
-  // 1. Direct Unpack into std::list
-  std::list<Operand> stack;
-  size_t op_idx = 0;
-  ([&](const auto& op) {
-    Operand opx = {std::cref(op), eq.operands()[op_idx++]};
-    stack.push_back(opx);
-  }(operands), ...);
+  if (level != None) {
+    multival_t indices_size = eq.indices_size(operands...);
 
-  // 2. Contraction if needed
-  Equation current_eq = eq;
-  if (current_eq.n() > 2) {
-    path_t path = find_path_greedy(current_eq);
+    // 1. Direct Unpack into std::list
+    std::list<Operand> stack;
+    size_t op_idx = 0;
+    ([&](const auto& op) {
+      Operand opx = {std::cref(op), eq.operands()[op_idx++]};
+      stack.push_back(opx);
+    }(operands), ...);
 
-    for (const auto& step : path) {
-      auto itA = std::next(stack.begin(), static_cast<ssize_t>(step[0]));
-      auto itB = std::next(stack.begin(), static_cast<ssize_t>(step[1]));
+    // 2. Contraction if needed
+    Equation current_eq = eq;
+    if (current_eq.n() > 2) {
+      path_t path = find_path_greedy(current_eq, indices_size);
 
-      // Calculate intermediate labels
-      indices_t inter = _remaining_intermediate(current_eq, step);
+      for (const auto& step : path) {
+        auto itA = std::next(stack.begin(), static_cast<ssize_t>(step[0]));
+        auto itB = std::next(stack.begin(), static_cast<ssize_t>(step[1]));
 
-      // Construct & evaluate the transformation equation for this pair
-      Equation transformation({itA->labels, itB->labels, inter});
+        // Calculate intermediate labels
+        indices_t inter = _remaining_intermediate(current_eq, step);
+
+        // Construct & evaluate the transformation equation for this pair
+        Equation transformation({itA->labels, itB->labels, inter});
 #ifdef ARMA_EINSUM_DEBUG
-      std::cout << std::string(current_eq);
+        std::cout << std::string(current_eq);
 #endif
-      Operand result = _evaluate_pair(*itA, *itB, transformation);
+        Operand result = _evaluate_pair(*itA, *itB, transformation);
 
-      // update
-      stack.erase(itA);
-      *itB = std::move(result);
-      current_eq = _simplify(current_eq, step, inter);
+        // update
+        stack.erase(itA);
+        *itB = std::move(result);
+        current_eq = _simplify(current_eq, step, inter);
+      }
     }
-  }
 
-  return _evaluate_final(stack.front(), current_eq);
+    return _evaluate_final(stack.front(), current_eq);
+  } else {
+    return eq.evaluate_mat<T>(operands...);
+  }
 }
 
 /**
