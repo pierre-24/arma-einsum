@@ -13,6 +13,7 @@
 #include <map>
 #include <set>
 #include <list>
+#include <variant>
 
 #ifndef ARMA_EINSUM_FORMAT  // use std::format by default
 #include <format>
