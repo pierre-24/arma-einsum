@@ -13,6 +13,7 @@
 #include <map>
 #include <set>
 #include <list>
+#include <variant>
 
 #ifndef ARMA_EINSUM_FORMAT  // use std::format by default
 #include <format>
@@ -132,8 +133,9 @@ class Equation {
  private:
   std::vector<indices_t> _eq;
 
-  /// Parse the indices starting at `position` in `input`
-  static indices_t _parse_indices(const std::string& input, uint64_t& position);
+  static indices_t _calculate_implicit(const std::vector<indices_t>& operands);
+
+  static void _validate_usage(const std::vector<indices_t>& operands);
 
  public:
   Equation() = default;
@@ -142,9 +144,7 @@ class Equation {
   Equation& operator=(const Equation&) = default;
 
   explicit Equation(const std::vector<indices_t>& indices): _eq(indices) {
-    if (indices.size() < 2) {
-      throw EvaluationError("not enough operands");
-    }
+    _validate_usage(_eq);
   }
 
   /// Get operands
@@ -203,6 +203,24 @@ class Equation {
   }
 
   /**
+   * Evaluate the size of each index, given `operands`
+   *
+   * @tparam Types Armadillo types
+   * @param operands Armadillo objects
+   * @return a std::map with, for each index in `_eq`, its size
+   */
+  template <ArmadilloType... Types> multival_t indices_size(const Types&... operands) const;
+
+  /**
+   * Estimate the flop count of `this`.
+   *
+   * @tparam T A floating point type
+   * @param indices_size the size of all indices appearing in `this`
+   * @return the estimated flop count to evaluate `this`
+   */
+  template <typename T> T estimate_flop_count(const multival_t& indices_size);
+
+  /**
    * Evaluate the equation using `operands` and return a matrix
    *
    * @tparam T a floating point type
@@ -211,7 +229,6 @@ class Equation {
    * @return a matrix defined by the equation
    */
   template <typename T, ArmadilloType... Types> arma::Mat<T> evaluate_mat(const Types&... operands) const;
-
 
   /**
    * Parse a given equation:
@@ -225,121 +242,134 @@ class Equation {
   static Equation parse(const std::string& equation);
 };
 
-/// Parse indices
-inline indices_t Equation::_parse_indices(const std::string& input, uint64_t& position) {
-  if (position >= input.length()) {
-    throw ParserError(position, "expected indices, got EOS");
-  }
+inline indices_t Equation::_calculate_implicit(const std::vector<indices_t>& operands) {
+  uint64_t counts[256] = {0};
+  std::vector<char> order;  // To preserve the first-appearance order
 
-  if (!isalpha(input[position])) {
-    throw ParserError(position, "expected a letter for indices");
-  }
-
-  indices_t indices;
-  while (position < input.length() && isalpha(input[position])) {
-    indices.push_back(input[position]);
-    position++;
-  }
-
-  if (indices.empty()) {
-    throw ParserError(position, "expected at least one index");
-  }
-
-  if (indices.size() > 3) {
-    throw ParserError(
-      position, ARMA_EINSUM_FORMAT("too many indices ({}), armadillo only can go up to 3", indices.size()));
-  }
-
-  return indices;
-}
-
-inline Equation Equation::parse(const std::string& equation) {
-  if (equation.empty()) {
-    throw ParserError(0, "empty equation");
-  }
-
-  uint64_t i = 0;
-
-  // parse operands
-  std::vector<indices_t> eq;
-  while (i < equation.length()) {
-    if (isalpha(equation[i])) {
-      eq.push_back(_parse_indices(equation, i));
-    } else if (equation[i] == ',') {
-      i++;
-    } else if (equation[i] == '-') {
-      break;
-    } else {
-      throw ParserError(i, "unexpected character");
-    }
-  }
-
-  if (eq.empty()) {
-    throw ParserError(i, "expected at least one operand");
-  }
-
-  // parse result if any
-  if (equation[i] == '-') {
-    i++;
-    if (equation[i] != '>') {
-      throw ParserError(i, "expected '>'");
-    }
-    i++;
-
-    if (i == equation.length()) {  // result is a single number
-      eq.push_back(indices_t());
-      return Equation(eq);
-    }
-
-    // there are indices for result
-    eq.push_back(_parse_indices(equation, i));
-
-    if (i != equation.length()) {
-      throw ParserError(i, "expected EOS, but the string is longer");
-    }
-
-    return Equation(eq);
-  }
-
-  // if not, use non-repeated indices in alphabetical order
-  indices_t nri;
-  for (auto& operand : eq) {
-    for (const auto& c : operand) {
-      if (auto position = std::find(nri.begin(), nri.end(), c); position != nri.end()) {
-        nri.erase(position);
-      } else {
-        nri.push_back(c);
+  for (const auto& op : operands) {
+    for (char c : op) {
+      if (counts[static_cast<unsigned char>(c)] == 0) {
+        order.push_back(c);
       }
+      counts[static_cast<unsigned char>(c)]++;
     }
   }
 
-  if (nri.size() > 3) {
-    throw ParserError(
-      i, ARMA_EINSUM_FORMAT("too many indices ({}) in result, armadillo only can go up to 3", nri.size()));
+  indices_t result;
+  for (char c : order) {
+    // In standard einsum, indices appearing once are kept.
+    // Indices appearing twice are contracted.
+    if (counts[static_cast<unsigned char>(c)] == 1) {
+      result.push_back(c);
+    }
   }
 
-  std::sort(nri.begin(), nri.end());
-  eq.push_back(nri);
+  // Sort to be deterministic, as per NumPy convention
+  std::sort(result.begin(), result.end());
 
-  return Equation(eq);
+  if (result.size() > 3) {
+    throw EvaluationError("Implicit result rank > 3");
+  }
+
+  return result;
 }
 
-template <typename T, ArmadilloType... Types>
-arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
-  // 1. Basic validation of result dimensionality
-  const auto& result_indices = _eq.back();
-  if (result_indices.size() > 2) {
-    throw EvaluationError("Result rank > 2; use evaluate_cube() instead.");
+inline void Equation::_validate_usage(const std::vector<indices_t>& operands) {
+  if (operands.size() < 2) {
+    throw EvaluationError("At least two operands are required");
   }
 
-  // 2. Validate operand count
+  // 1. Map out all indices present in the input operands
+  bool input_registry[256] = {false};
+
+  for (size_t i = 0; i < operands.size() - 1; ++i) {
+    for (char c : operands[i]) {
+      input_registry[static_cast<unsigned char>(c)] = true;
+    }
+  }
+
+  // 2. Cross-reference the result indices against the registry
+  const indices_t& result_labels = operands.back();
+  for (char c : result_labels) {
+    if (!input_registry[static_cast<unsigned char>(c)]) {
+      throw ParserError(
+          0, ARMA_EINSUM_FORMAT(
+                 "Result integrity violation: index '{}' appears in result but not in any input operand.", c));
+    }
+  }
+}
+
+inline Equation Equation::parse(const std::string& eq) {
+  std::string_view equation = eq;
+  if (equation.empty()) {
+    throw ParserError(0, "Empty equation");
+  }
+
+  std::vector<indices_t> operands;
+  indices_t current_indices;
+  bool parsing_result = false;
+  size_t i = 0;
+
+  auto flush_operand = [&]() {
+    if (current_indices.size() > 3) {
+      throw ParserError(i, "Rank exceeds Armadillo limit (max 3)");
+    }
+    operands.push_back(std::move(current_indices));
+    current_indices = {};
+  };
+
+  while (i < equation.length()) {
+    char c = equation[i];
+
+    if (std::isspace(c)) {
+      i++;
+      continue;
+    }
+
+    if (std::isalpha(c)) {
+      current_indices.push_back(c);
+    } else if (c == ',') {
+      if (parsing_result) {
+        throw ParserError(i, "Unexpected comma in result section");
+      } else if (current_indices.empty()) {
+        throw ParserError(i, "Empty operand (double comma?)");
+      }
+      flush_operand();
+    } else if (c == '-') {
+      if (parsing_result) {
+        throw ParserError(i, "Multiple arrows detected");
+      } else if (i + 1 >= equation.length() || equation[i + 1] != '>') {
+        throw ParserError(i, "Expected '->'");
+      }
+
+      flush_operand();
+      parsing_result = true;
+      i++;  // Skip the '>'
+    } else {
+      throw ParserError(i, "Invalid character in equation");
+    }
+    i++;
+  }
+
+  // Handle the final indices (either the result or the last operand)
+  flush_operand();
+
+  // If no arrow was provided, calculate implicit labels
+  if (!parsing_result) {
+    operands.push_back(_calculate_implicit(operands));
+  }
+
+  return Equation(operands);
+}
+
+template <ArmadilloType... Types>
+multival_t Equation::indices_size(const Types&... operands) const {
   if (sizeof...(Types) != _eq.size() - 1) {
     throw EvaluationError(ARMA_EINSUM_FORMAT("Expected {} operands, got {}", _eq.size() - 1, sizeof...(Types)));
   }
 
   multival_t indices_size;
 
-  // 3. Define and check sizes
   auto check_and_map = [&]<std::size_t... I>(std::index_sequence<I...>) {
     auto validate = [&]<typename T0>(auto idx, const T0& op) {
       using OpType = std::decay_t<T0>;
@@ -388,7 +418,32 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
 
   check_and_map(std::make_index_sequence<sizeof...(Types)>{});
 
-  // 4. Initialize result matrix
+  return indices_size;
+}
+
+template <typename T>
+T Equation::estimate_flop_count(const multival_t& indices_size) {
+  auto uniques = unique_indices();
+
+  T flop_count = std::accumulate(uniques.begin(), uniques.end(), 1, [&](T a, auto& b) {
+    return a * static_cast<T>(indices_size.at(b));
+  });
+
+  return flop_count * static_cast<T>(_eq.size() - 1);
+}
+
+template <typename T, ArmadilloType... Types>
+arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
+  // 1. Basic validation of result dimensionality
+  const auto& result_indices = _eq.back();
+  if (result_indices.size() > 2) {
+    throw EvaluationError("Result rank > 2; use evaluate_cube() instead.");
+  }
+
+  // 2. Define and check sizes
+  multival_t indices_size = this->indices_size(operands...);
+
+  // 3. Initialize result matrix
   arma::Mat<T> result;
   if (result_indices.empty()) {
     result.set_size(1, 1);
@@ -399,7 +454,7 @@ arma::Mat<T> Equation::evaluate_mat(const Types&... operands) const {
   }
   result.zeros();
 
-  // Setup: Create the master label list (schema) and the ID maps
+  // 4. Setup: Create the master label list (schema) and the ID maps
   std::vector<char> all_labels;
   std::set<char> unique_labels;
   for (const auto& labels : _eq) {
@@ -517,6 +572,7 @@ using path_t = std::vector<step_t>;
 
 /// Method to find optimal path
 enum Optimization {
+  None,
   Greedy,
 };
 
@@ -571,7 +627,7 @@ class ContractionEngine {
   ContractionEngine() = default;
 
   /// Find a path to evaluate `eq`, using the "greedy" algorithm (use best contraction at each step)
-  static path_t find_path_greedy(const Equation& eq);
+  static path_t find_path_greedy(const Equation& eq, const multival_t& indices_size);
 
   /**
    * Evaluate `eq` by optimizing it when possible
@@ -792,13 +848,13 @@ const Operand& a, const Equation& transformation) {
 }
 
 template <typename T>
-path_t ContractionEngine<T>::find_path_greedy(const Equation& eq) {
+path_t ContractionEngine<T>::find_path_greedy(const Equation& eq, const multival_t& indices_size) {
   auto ceq = eq;
 
   path_t result;
 
   while (ceq.n() > 2) {
-    uint64_t cost = ceq.length();
+    T cost = ceq.estimate_flop_count<T>(indices_size);
     step_t best_step = {0, 1};
 
     // find best step
@@ -812,8 +868,11 @@ path_t ContractionEngine<T>::find_path_greedy(const Equation& eq) {
         auto transformation = Equation({ceq.at(iop), ceq.at(jop), intermediates});
         auto simplified = _simplify(ceq, {iop, jop}, transformation.operands().back());
 
-        if (simplified.length() < cost) {
-          cost = simplified.length();
+        T new_cost =
+          simplified.estimate_flop_count<T>(indices_size) + transformation.estimate_flop_count<T>(indices_size);
+
+        if (new_cost < cost) {
+          cost = new_cost;
           best_step = {iop, jop};
         }
       }
@@ -833,41 +892,47 @@ template <typename T>
 template <ArmadilloType... Types>
 arma::Mat<T> ContractionEngine<T>::evaluate_mat(
 const Optimization& level, const Equation& eq, const Types&... operands) const {
-  // 1. Direct Unpack into std::list
-  std::list<Operand> stack;
-  size_t op_idx = 0;
-  ([&](const auto& op) {
-    Operand opx = {std::cref(op), eq.operands()[op_idx++]};
-    stack.push_back(opx);
-  }(operands), ...);
+  if (level != None) {
+    multival_t indices_size = eq.indices_size(operands...);
 
-  // 2. Contraction if needed
-  Equation current_eq = eq;
-  if (current_eq.n() > 2) {
-    path_t path = find_path_greedy(current_eq);
+    // 1. Direct Unpack into std::list
+    std::list<Operand> stack;
+    size_t op_idx = 0;
+    ([&](const auto& op) {
+      Operand opx = {std::cref(op), eq.operands()[op_idx++]};
+      stack.push_back(opx);
+    }(operands), ...);
 
-    for (const auto& step : path) {
-      auto itA = std::next(stack.begin(), static_cast<ssize_t>(step[0]));
-      auto itB = std::next(stack.begin(), static_cast<ssize_t>(step[1]));
+    // 2. Contraction if needed
+    Equation current_eq = eq;
+    if (current_eq.n() > 2) {
+      path_t path = find_path_greedy(current_eq, indices_size);
 
-      // Calculate intermediate labels
-      indices_t inter = _remaining_intermediate(current_eq, step);
+      for (const auto& step : path) {
+        auto itA = std::next(stack.begin(), static_cast<ssize_t>(step[0]));
+        auto itB = std::next(stack.begin(), static_cast<ssize_t>(step[1]));
 
-      // Construct & evaluate the transformation equation for this pair
-      Equation transformation({itA->labels, itB->labels, inter});
+        // Calculate intermediate labels
+        indices_t inter = _remaining_intermediate(current_eq, step);
+
+        // Construct & evaluate the transformation equation for this pair
+        Equation transformation({itA->labels, itB->labels, inter});
 #ifdef ARMA_EINSUM_DEBUG
-      std::cout << std::string(current_eq);
+        std::cout << std::string(current_eq);
 #endif
-      Operand result = _evaluate_pair(*itA, *itB, transformation);
+        Operand result = _evaluate_pair(*itA, *itB, transformation);
 
-      // update
-      stack.erase(itA);
-      *itB = std::move(result);
-      current_eq = _simplify(current_eq, step, inter);
+        // update
+        stack.erase(itA);
+        *itB = std::move(result);
+        current_eq = _simplify(current_eq, step, inter);
+      }
     }
-  }
 
-  return _evaluate_final(stack.front(), current_eq);
+    return _evaluate_final(stack.front(), current_eq);
+  } else {
+    return eq.evaluate_mat<T>(operands...);
+  }
 }
 
 /**
