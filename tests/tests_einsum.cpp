@@ -197,6 +197,38 @@ TEST_F(EinsumTests, density) {
     "abstol", 1e-5));
 }
 
+TEST_F(EinsumTests, mulliken) {
+  // Example taken from quantum chemistry: Muliken population
+  auto P = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
+  auto S = arma::randn<arma::Mat<TEST_FLOAT>>(5, 5);
+
+  S = S + S.t();
+
+  std::string eq = "ij,ji->i";  // atomic orbitals population
+
+  EXPECT_TRUE(arma::approx_equal(
+    armaeinsum::einsum_mat<TEST_FLOAT>(eq, P, S),
+    arma::diagvec(P * S),
+    "abstol", 1e-5));
+
+  EXPECT_TRUE(arma::approx_equal(
+    armaeinsum::einsum_mat_opt<TEST_FLOAT>(armaeinsum::Greedy, eq, P, S),
+    arma::diagvec(P * S),
+    "abstol", 1e-5));
+
+  eq = "ij,ji";  // total number of electrons
+
+  EXPECT_NEAR(
+    armaeinsum::einsum_mat<TEST_FLOAT>(eq, P, S).at(0, 0),
+    arma::trace(P * S),
+    1e-5);
+
+  EXPECT_NEAR(
+    armaeinsum::einsum_mat_opt<TEST_FLOAT>(armaeinsum::Greedy, eq, P, S).at(0, 0),
+    arma::trace(P * S),
+    1e-5);
+}
+
 TEST_F(EinsumTests, traces_with_cube) {
   auto A = arma::randn<arma::Cube<TEST_FLOAT>>(5, 5, 2);
 

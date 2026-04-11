@@ -694,106 +694,139 @@ typename ContractionEngine<T>::Operand ContractionEngine<T>::_evaluate_pair(
 const Operand& a, const Operand& b, const Equation& transformation) {
   assert(transformation.n() == 3);
 
-  auto iA = transformation.at(0);
-  auto iB = transformation.at(1);
-  auto iR = transformation.at(2);
+  const auto& iA = transformation.at(0);
+  const auto& iB = transformation.at(1);
+  const auto& iR = transformation.at(2);
 
 #ifdef ARMA_EINSUM_DEBUG
   std::cout << " && " << std::string(transformation) << std::endl;
 #endif
 
-  if (iA.size() == 1 && iA == iB && iR.size() == 0) {  // i,i->
+  const size_t rankA = iA.size();
+  const size_t rankB = iB.size();
+
+  // --- CASE 1: Vector-Vector (Rank 1 & 1) ---
+  if (rankA == 1 && rankB == 1) {
+    if (iA == iB && iR.empty()) {  // i,i->
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use DOT" << std::endl;
+      std::cout << "* use DOT" << std::endl;
 #endif
-    return {
-      arma::Mat<T>(
-        1, 1, arma::fill::value(arma::dot(_as_mat(a), _as_mat(b)))),
-      iR};
-  } else if (
-    iA.size() == 1 && iB.size() == 1 && iR.size() == 2
-    && iA.at(0) == iR.at(0) && iB.at(0) == iR.at(1)) {  // i,j-> ij
+      return {arma::Mat<T>(1, 1, arma::fill::value(arma::dot(_as_mat(a), _as_mat(b)))), iR};
+    }
+    if (iR.size() == 2 && iA[0] == iR[0] && iB[0] == iR[1]) {  // i,j-> ij
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use outer" << std::endl;
+      std::cout << "* use outer" << std::endl;
 #endif
-    return {_as_mat(a) * _as_mat(b).t(), iR};
-  } else if (iA.size() == 2 && iB.size() == 1 && iA.at(1) == iB.at(0) && iR.at(0) == iA.at(0)) {  // ij,j->i
+      return {_as_mat(a) * _as_mat(b).t(), iR};
+    }
+  }
+
+  // --- CASE 2: Matrix-Vector (Rank 2 & 1 or 1 & 2) ---
+  if (rankA == 2 && rankB == 1 && iR.size() == 1) {
+    if (iA[1] == iB[0] && iR[0] == iA[0]) {  // ij,j->i
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use AXPY" << std::endl;
+      std::cout << "* use AXPY" << std::endl;
 #endif
-    return {_as_mat(a) * _as_mat(b), iR};
-  } else if (iA.size() == 2 && iB.size() == 1 && iA.at(0) == iB.at(0) && iR.at(0) == iA.at(1)) {  // ji,j->i
+      return {_as_mat(a) * _as_mat(b), iR};
+    }
+    if (iA[0] == iB[0] && iR[0] == iA[1]) {  // ji,j->i
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use AXPY" << std::endl;
+      std::cout << "* use AXPY" << std::endl;
 #endif
-    return {_as_mat(a).t() * _as_mat(b), iR};
-  } else if (iA.size() == 1 && iB.size() == 2 && iA.at(0) == iB.at(1) && iR.at(0) == iB.at(0)) {  // j,ij->i
+      return {_as_mat(a).t() * _as_mat(b), iR};
+    }
+  } else if (rankA == 1 && rankB == 2 && iR.size() == 1) {
+    if (iA[0] == iB[1] && iR[0] == iB[0]) {  // j,ij->i
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use AXPY" << std::endl;
+      std::cout << "* use AXPY" << std::endl;
 #endif
-    return {_as_mat(b) * _as_mat(a), iR};
-  } else if (iA.size() == 1 && iB.size() == 2 && iA.at(0) == iB.at(0) && iR.at(0) == iB.at(1)) {  // i,ij->j
+      return {_as_mat(b) * _as_mat(a), iR};
+    }
+    if (iA[0] == iB[0] && iR[0] == iB[1]) {  // i,ij->j
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use AXPY" << std::endl;
+      std::cout << "* use AXPY" << std::endl;
 #endif
-    return {_as_mat(b).t() * _as_mat(a), iR};
-  } else if (iA.size() == 2 && iA == iB && iB == iR) {  // ij,ij->ij
+      return {_as_mat(b).t() * _as_mat(a), iR};
+    }
+
+    // Diagonal Scaling / Broadcasting
+    if (iR.size() == 2 && iA == iR) {
+      auto matA = _as_mat(a);
+      auto vecB = _as_mat(b);
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use Hadamard" << std::endl;
+      std::cout << "* use scaling" << std::endl;
 #endif
-    return {_as_mat(a) % _as_mat(b), iR};
-  } else if (iA.size() == 2 && iA == iB && iR.size() == 0) {  // ij,ij->
+      if (iA[0] == iB[0]) {  // Row scaling: ij, i -> ij
+        matA.each_col() %= vecB;
+        return {matA, iR};
+      } else if (iA[1] == iB[0]) {  // Col scaling: ij, j -> ij
+        matA.each_row() %= vecB.t();
+        return {matA, iR};
+      }
+    }
+  }
+
+  // --- CASE 3: Matrix-Matrix (Rank 2 & 2) ---
+  if (rankA == 2 && rankB == 2) {
+    if (iA == iB) {
+      if (iR == iA) {  // ij,ij->ij
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use reduce" << std::endl;
+        std::cout << "* use Hadamard" << std::endl;
 #endif
-    return {arma::Mat<T>(1, 1, arma::fill::value(arma::accu(_as_mat(a) % _as_mat(b)))), iR};
-  } else if (
-    iA.size() == 2 && iB.size() == 2
-    && iA.at(1) == iB.at(0) && iR.at(0) == iA.at(0) && iR.at(1) == iB.at(1)) {  // ik,kj->ij
+        return {_as_mat(a) % _as_mat(b), iR};
+      }
+      if (iR.empty()) {  // ij,ij->
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use GEMM" << std::endl;
+        std::cout << "* use reduce" << std::endl;
 #endif
-    return {_as_mat(a) * _as_mat(b), iR};
-  } else if (
-    iA.size() == 2 && iB.size() == 2
-    && iA.at(0) == iB.at(0) && iR.at(0) == iA.at(1) && iR.at(1) == iB.at(1)) {  // ki,kj->ij
+        return {arma::Mat<T>(1, 1, arma::fill::value(arma::accu(_as_mat(a) % _as_mat(b)))), iR};
+      }
+    }
+
+    if (iR.empty() && iA[0] == iB[1] && iA[1] == iB[0]) {
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use GEMM" << std::endl;
+      std::cout << "* use reduce (transpose)" << std::endl;
 #endif
-    return {_as_mat(a).t() * _as_mat(b), iR};
-  } else if (
-    iA.size() == 2 && iB.size() == 2
-    && iA.at(0) == iB.at(0) && iR.at(0) == iA.at(1) && iR.at(1) == iB.at(1)) {  // ki,kj->ij
+      return {arma::Mat<T>(1, 1, arma::fill::value(arma::accu(_as_mat(a) % _as_mat(b).t()))), iR};
+    }
+
+    if (iR.size() == 2) {
+      if (iA[1] == iB[0] && iR[0] == iA[0] && iR[1] == iB[1]) {  // ik,kj->ij
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use GEMM" << std::endl;
+        std::cout << "* use GEMM" << std::endl;
 #endif
-    return {_as_mat(a).t() * _as_mat(b), iR};
-  } else if (
-    iA.size() == 2 && iB.size() == 2
-    && iA.at(1) == iB.at(1) && iR.at(0) == iA.at(0) && iR.at(1) == iB.at(0)) {  // ik,jk->ij
+        return {_as_mat(a) * _as_mat(b), iR};
+      }
+      if (iA[0] == iB[0] && iR[0] == iA[1] && iR[1] == iB[1]) {  // ki,kj->ij
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use GEMM" << std::endl;
+        std::cout << "* use GEMM" << std::endl;
 #endif
-    return {_as_mat(a) * _as_mat(b).t(), iR};
-  } else if (iA.size() <= 2 && iB.size() <= 2) {
+        return {_as_mat(a).t() * _as_mat(b), iR};
+      }
+      if (iA[1] == iB[1] && iR[0] == iA[0] && iR[1] == iB[0]) {  // ik,jk->ij
 #ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use evaluate_mat" << std::endl;
+        std::cout << "* use GEMM" << std::endl;
 #endif
+        return {_as_mat(a) * _as_mat(b).t(), iR};
+      }
+    }
+  }
+
+  // --- CASE 4: Fallback (Handles Cubes or Complex Multi-index patterns) ---
+#ifdef ARMA_EINSUM_DEBUG
+  std::cout << "* use evaluate_mat" << std::endl;
+#endif
+
+  if (rankA <= 2 && rankB <= 2) {
     return {transformation.evaluate_mat<T>(_as_mat(a), _as_mat(b)), iR};
-  } else if (iA.size() <= 2 && iB.size() == 3) {
-#ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use evaluate_mat" << std::endl;
-#endif
+  }
+  if (rankA <= 2 && rankB == 3) {
     return {transformation.evaluate_mat<T>(_as_mat(a), _as_cube(b)), iR};
-  } else if (iA.size() == 3 && iB.size() <= 2) {
-#ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use evaluate_mat" << std::endl;
-#endif
+  }
+  if (rankA == 3 && rankB <= 2) {
     return {transformation.evaluate_mat<T>(_as_cube(a), _as_mat(b)), iR};
-  } else if (iA.size() == 3 && iB.size() == 3) {
-#ifdef ARMA_EINSUM_DEBUG
-    std::cout << "* use evaluate_mat" << std::endl;
-#endif
+  }
+  if (rankA == 3 && rankB == 3) {
     return {transformation.evaluate_mat<T>(_as_cube(a), _as_cube(b)), iR};
   }
 
